@@ -1,0 +1,14 @@
+[package]
+name = "wam"
+description = "A Prolog-like language based on Warren's Abstract Machine"
+version = "0.1.0"
+authors = ["Robert Jacobson <rljacobson@gmail.com>"]
+edition = "2018"
+
+[features]
+debug_print = []
+
+[dependencies]
+prettytable-rs = "^0.8"
+lazy_static = "^1.4.0"
+

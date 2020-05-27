@@ -14,11 +14,11 @@ pub enum Cell {
   REF(Address),
   /// A functor
   Functor(Functor),
-  /// A Term, used as an intermediate representation in registers for error handling.
+  /// A Term, used as an intermediate representation in registers.
+  Structure(Vec<Cell>),
   Term(Term),
   /// Unfilled cell.
-  Empty,
-  String(Vec<Cell>)
+  Empty
 }
 
 impl Display for Cell{
@@ -33,15 +33,23 @@ impl Display for Cell{
       Cell::Functor(funct) => {
         write!(f, "{}", funct)
       },
-      Cell::Term(term) => {
-        write!(f, "<Term: {}>", term)
+      Cell::Structure(v) => {
+        write!(
+          f,
+          "{}",
+          v
+            .iter()
+            .map(|c| { format!("{}", c)})
+            .collect::<Vec<String>>()
+            .join(", ")
+        )
       },
+      Cell::Term(term) => {
+        write!(f, "{}", term)
+      }
       Cell::Empty => {
         write!(f, "`")
       },
-      Cell::String(v) => {
-        write!(f, "{}", v.iter().map(|c| { format!("{}", c)}).collect::<Vec<String>>().join(", "))
-      }
     }
   }
 }
