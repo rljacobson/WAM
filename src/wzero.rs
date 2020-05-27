@@ -540,15 +540,15 @@ impl WZero {
 
   // region VM instruction methods
 
-  /// Dereference a chain of references. Returns either a variable (a self-reference), an `STR`,
-  /// or a functor.
-  fn dereference(& self, ptr: &Address) -> Cell{
+  /// Dereference a chain of references. Returns either the address of a variable (a
+  /// self-reference), an `STR`, or a functor.
+  fn dereference(& self, ptr: &Address) -> Address{
     let cell = self.value_at(ptr);
     match cell{
       // Do not dereference variables, which reference themselves.
       Cell::REF(a) if a != *ptr =>
         self.dereference(&a),
-      _ => cell,
+      _ => ptr,
     } // end match cell
   }
 
@@ -556,22 +556,25 @@ impl WZero {
     Binds an unbound variable at one address to the other address. If both are unbound, the first
      is bound to the second (arbitrarily).
   */
-  fn bind(&mut self, cell1: &Cell, cell2: &Cell){
+  fn bind(&mut self, add1: &Address, add2: &Address){
     #[cfg(debug_print)]
-    println!("bind({}, {}): ", cell1, cell2);
+    println!("bind({}, {}): ", add1, add2);
+    let cell1 = self.value_at(add1);
+    let cell2 = self.value_at(add2);
+
     match (cell1, cell2){
       // | (Cell::Empty, Cell::REF(_))
       // | (Cell::Empty, Cell::STR(add))
-      (Cell::REF(add), _) if *cell1 == self.value_at(add) => {
+      (Cell::REF(add), _) if *add1 == add => {
         // `cell1` is a variable. Bind to cell2.
-        println!("Binding {} to {}", add, cell2);
-        self.set_value_at(&add, &cell2);
+        println!("Binding {} to {}", add1, add2);
+        self.set_value_at(&add1, &Cell::REF(*add2));
       },
       // | (_, Cell::Empty)
-      (_, Cell::REF(add)) if *cell2 == self.value_at(add) => {
+      (_, Cell::REF(add)) if *add2 == add => {
         // `cell2` is a variable. Bind to cell1.
-        println!("Binding {} to {}", add, cell1);
-        self.set_value_at(&add, &cell1);
+        println!("Binding {} to {}", add2, add1);
+        self.set_value_at(&add2, &Cell::REF(*add1));
       },
       _ => {
         // Neither `cell1` nor `cell2` are variables, an error state.
@@ -636,17 +639,19 @@ impl WZero {
   fn get_structure(&mut self, funct: &Functor, reg_ptr: &Address){
     reg_ptr.require_register();
 
-    let value = self.dereference(reg_ptr);
-    match value {
+    let address = self.dereference(reg_ptr);
+    let cell_at_add = self.value_at(&address);
+    match cell_at_add {
       Cell::REF(_) => {
         // A variable. Create a new functor structure for `funct` on the stack and bind the
         // variable to the functor.
         #[cfg(debug_print)]
         println!("get_structure({}, {}): creating struct", funct, reg_ptr);
-        let cell = Cell::STR(Address::from_heap_idx(self.HEAP.len() + 1));
+        let funct_add = Address::from_heap_idx(self.HEAP.len() + 1);
+        let cell = Cell::STR(funct_add);
         self.HEAP.push(cell.clone());
         self.HEAP.push(Cell::Functor(*funct));
-        self.bind(&value, &cell);
+        self.bind(&address, &funct_add);
         self.mode = Mode::Write;
       },
       Cell::STR(cell_ptr @ Address::CellPtr(_)) => {
@@ -666,7 +671,7 @@ impl WZero {
       _ => {
         // Failed to unify
         #[cfg(debug_print)]
-        println!("get_structure({}, {}) - neither REF nor STR found: {}", funct, reg_ptr, value);
+        println!("get_structure({}, {}) - neither REF nor STR found: {}", funct, reg_ptr, address);
         self.fail = true;
       }
     };
