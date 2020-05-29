@@ -1,9 +1,13 @@
-
-
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::rc::Rc;
+
 use crate::address::Address;
 use crate::functor::Functor;
-use crate::term::Term;
+use crate::term::RcTerm;
+
+pub type RcCell = Rc<Cell>;
+pub type CellVec = Rc<Vec<Rc<Cell>>>;
 
 /// Concrete in-memory representation of terms
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
@@ -15,8 +19,9 @@ pub enum Cell {
   /// A functor
   Functor(Functor),
   /// A Term, used as an intermediate representation in registers.
-  Structure(Vec<Cell>),
-  Term(Term),
+  Structure(CellVec),
+  /// Used to record context in an error condition
+  Term(RcTerm),
   /// Unfilled cell.
   Empty
 }
@@ -51,5 +56,23 @@ impl Display for Cell{
         write!(f, "`")
       },
     }
+  }
+}
+
+
+/// Extracts all the addresses from a `CellVec`.
+pub fn extract_addresses(cell: RcCell) -> Option<HashSet<Address>>{
+  match &*cell{
+    Cell::Structure(cell_vec) => {
+      let addresses =
+        cell_vec.iter().filter_map(| c | {
+          match &*c.clone(){
+            Cell::REF(address) => Some(*address),
+            _ => None
+          }
+        }).collect();
+      Some(addresses)
+    }
+    _ => None
   }
 }

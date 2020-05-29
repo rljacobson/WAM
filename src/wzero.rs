@@ -2,18 +2,21 @@
 #![allow(non_snake_case)]
 // #![allow(dead_code)]
 
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::ops::Deref;
+use std::rc::Rc;
 
 use prettytable::{format as TableFormat, Table};
 
-use crate::cell::Cell;
 use crate::address::Address;
-use crate::term::{Term, TermIter, make_struct};
+use crate::cell::Cell;
 use crate::functor::Functor;
-use std::rc::Rc;
-use std::cell::{RefCell, Ref, RefMut};
+use crate::parser::parse;
+use crate::term::{BoxTerm, Term};
+use crate::token::*;
+use crate::token;
 
 type RcRefCell<T> = Rc<RefCell<T>>;
 
@@ -31,7 +34,8 @@ pub struct WZero{
   HEAP : Vec<Cell>,
   /// Query Registers
   X    : RcRefCell<Vec<Cell>>,
-  token_stack: RcRefCell<Vec<Cell>>,
+  #[cfg(debug_print)]
+  token_stack: RcRefCell<Vec<Token>>,
   /// Holds the address of the query.
   query_address: Address
 }
@@ -40,8 +44,9 @@ impl WZero {
 
   // region Display methods
 
-  fn  make_register_table(name: char, registers: &Vec<Cell>, highlight: Option<usize>, start: usize)
-    -> Table{
+  fn  make_register_table<T>(name: char, registers: &Vec<T>, highlight: Option<usize>, start: usize)
+    -> Table
+    where T: Display{
     let mut table = Table::new();
 
     table.set_format(*TABLE_DISPLAY_FORMAT);
@@ -72,6 +77,7 @@ impl WZero {
       S    :  0,
       T    :  0,
       HEAP :  vec![],
+      #[cfg(debug_print)]
       token_stack: Rc::new(RefCell::new(vec![])),
       X    :  Rc::new(RefCell::new(vec![])),
       query_address: Address::CellPtr(0)
@@ -80,12 +86,12 @@ impl WZero {
 
   /// Extracts the functor from either `Cell::Structure` or `Cell::STR` values.
   //  This function can't be in `crate::cell`, because it uses `self.value_at`.
-  fn extract_functor(&self, cell: &Cell) -> Option<Functor>{
-    match cell {
+  fn extract_functor(&self, address: &Address) -> Option<Functor>{
+    match &self.value_at(address) {
       Cell::Functor(functor)  => Some(*functor),
-      Cell::STR(address)        => {
-        self.extract_functor( &self.value_at(address) )
-      },
+      Cell::STR(inner_address)        => {
+        self.extract_functor( inner_address )
+      }
       _ => {
         None
       }
@@ -111,18 +117,29 @@ impl WZero {
   }
 
   /**
-    Sets the value at the given address, which address is assumed to exist.
+    Sets the value at the given address, dynamically growing the relevant vector if the address
+    is larger than the max index of the vector.
 
     See `set_value` for differences between the two functions.
   */
-  fn set_value_at(&mut self, ptr: &Address, value: &Cell){
-    match ptr {
+  fn set_value_at(&mut self, address: &Address, cell: &Cell){
+    match address {
+
       Address::RegPtr(_) => {
-        self.X.borrow_mut()[ptr.idx()] = value.clone();
+        let mut x_ref = self.X.deref().borrow_mut();
+        if address.idx() >= x_ref.len() {
+          x_ref.resize(address.idx() + 1, Cell::Empty);
+        }
+        x_ref[address.idx()] = cell.clone();
       },
+
       Address::CellPtr(_) => {
-        self.HEAP[ptr.idx()] = value.clone();
+        if address.idx() >= self.HEAP.len() {
+          self.HEAP.resize(address.idx() + 1, Cell::Empty);
+        }
+        self.HEAP[address.idx()] = cell.clone();
       }
+
     }
   }
 
@@ -130,410 +147,143 @@ impl WZero {
 
   // region Compilation/Interpretation
 
-  pub fn compile(&mut self, ast: &Term){
-    let mut is_program: bool;
+  /**
+    Accepts a program or query as a string and turns it into a sequences of operations or an
+    in-memory representation.
+
+    The compilation pipeline is this:
+
+      text -> [`parser::parse`] -> `Term`s ->⋯
+
+          ┌───────────────[`token::flatten_term`]────────────────┐
+      ⋯->*│*-> [`TermIter`] -> `Cell`s -> [`order_registers`] ->*│*->⋯
+          └──────────────────────────────────────────────────────┘
+
+      ⋯-> `Token`s -> [`compile_tokens`] -> `Cell`s/instructions ->⋯
+
+      ⋯-> [`unify`] -> Success/Fail
+
+    The [`unify`] step is part of `compile_tokens` and interprets the instructions to build the
+    in-memory `Cell`s.
+
+  */
+  pub fn compile(&mut self, text: &str){
+    let ast: BoxTerm = parse(text);
+
     // The first term determines whether we are compiling a Query or a Program.
-    let root_term = match ast {
+    let is_program: bool;
+    let root_term = match *ast {
       Term::Program(p) => {
         is_program = true;
-        p.clone()
+        p
       },
       Term::Query(q)   => {
         is_program = false;
-        q.clone()
+        q
       },
       _t                     => {
         panic!("Error: Compile takes either a query or a program but was given {}.", _t);
       }
     };
 
-    // STEP 1: Flatten the term.
-    self.flatten_term(root_term.clone());
-
-    // STEP 2: Order the registers
-    let order = self.order_registers();
-    #[cfg(debug_print)]
-    {
-      print!("Flattened order: ");
-      match is_program {
-        true => {
-          for a in order.deref().borrow().iter().rev() {
-            print!("{} ", a);
-          }
-        },
-        false => {
-          for a in order.deref().borrow().iter() {
-            print!("{} ", a);
-          }
-        }
-      }
-      println!();
-    }
+    // STEP 1&2: Flatten (and order) the term.
+    let (flattened, mut order) = token::flatten_term(root_term);
 
     // STEP 3: Emit or interpret code.
     match is_program {
       true => {
-        order.deref().borrow_mut().reverse();
-        self.compile_flat_term(order.deref().borrow().as_ref(), &PROGRAM_OPS);
+        order.reverse(); // Programs are ordered reverse of queries.
+        let tokenizer = Tokenizer::new(flattened, order);
+        self.compile_tokens(tokenizer, &PROGRAM_OPS);
       }
       false => {
-        self.compile_flat_term(order.deref().borrow().as_ref(), &QUERY_OPS);
+        let tokenizer = Tokenizer::new(flattened, order);
+        self.compile_tokens(tokenizer, &QUERY_OPS);
       }
     }
   }
-
-  /**
-    Computes the flattened form expressed in registers of the given Term AST. The flattened form
-    of the AST is the non-variable registers.
-
-    Example:
-      The registers containing the flattened form of `p(Z, h(Z, W), f(W))` are
-        ```
-        X1 = p(X2, X3, X4)
-        X2 = Z
-        X3 = h(X2, X5)
-        X4 = f(X5)
-        X5 = W
-        ```
-    Unfortunately, we can't simultaneously compile the term, because the flattened form needs to
-    be ordered in a particular way.
-  */
-  fn flatten_term(& self, ast: RcRefCell<Term>){
-    let mut seen: HashMap<Term, Address> = HashMap::new();
-
-    //  We visit the AST breadth first, adding new symbols to `seen` as we go.
-    let terms = ast.deref().borrow().iter();
-    for term in terms{
-      if !seen.contains_key(&term){
-        let address = Address::from_reg_idx(seen.len());
-        seen.insert(term, address);
-      }
-    }
-
-    // Prep the registers.
-    { // Scope of X_ref
-      let mut X_ref = self.X.deref().borrow_mut();
-      X_ref.clear();
-      X_ref.resize(seen.len(), Cell::Empty);
-    }
-
-    // Every term has a register assignment. Now populate the registers.
-    for (term, reg_ptr) in seen.iter(){
-      match term{
-        Term::Structure {functor, args} => {
-          // Trying to be a bit too clever, probably.
-          let mut new_args =
-            args.deref().borrow()
-            .iter()
-            .map(|t| Cell::REF(*seen.get(t).unwrap()))
-            .collect::<Vec<Cell>>();
-          new_args.insert(0, Cell::Functor(*functor));
-          self.X.deref().borrow_mut()[reg_ptr.idx()] = Cell::Structure(new_args);
-        },
-        Term::Variable(_) =>{
-          self.X.deref().borrow_mut()[reg_ptr.idx()] = Cell::REF(*reg_ptr);
-        }
-        _t => {
-          // This should never happen in correct code.
-          self.X.deref().borrow_mut()[reg_ptr.idx()] = Cell::Term(_t.deref().clone());
-        }
-      }
-    }
-  }
-
-
-  /// Extracts all the addresses from a `Vec<Cell>`.
-  fn extract_addresses(cell: &Cell) -> Option<HashSet<Address>>{
-    match cell{
-      Cell::Structure(cell_vec) => {
-        let addresses =
-        cell_vec.iter().filter_map(| c | {
-          match c{
-            Cell::REF(address) => Some(*address),
-            _ => None
-          }
-        }).collect();
-        Some(addresses)
-      }
-      _ => None
-    }
-  }
-
-  /**
-    Orders the registers of a flattened term so that registers are assigned to before
-    they are used (appear on the RHS of an assignment). The order is done in-place.
-
-    This function assumes that the registers already contain a flattened
-    term. Registers containing variable terms are not included in the result.
-
-    > [F]or left-to-right code generation to be well-founded, it is necessary
-    > to order a flattened query term to ensure that a register name may
-    > not be used in the right-hand side of an assignment (viz., as a subterm)
-    > before its assignment, if it has one (viz., being the left-hand side).
-  */
-  fn order_registers(&mut self) -> RcRefCell<Vec<Address>>{
-    // Contains the register arguments we've seen before.
-    let mut seen: HashSet<Address> = HashSet::new();
-    let mut unseen: HashSet<Address> = HashSet::new();
-    // The vector holding the result
-    let ordered: RcRefCell<Vec<Address>> = Rc::new(RefCell::new(Vec::new()));
-    let mut ordered_ref = ordered.deref().borrow_mut();
-    let X_ref = self.X.deref().borrow();
-
-    // First collect which registers need to be ordered, marking registers containing variables
-    // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s..
-    for (index, cell) in X_ref.iter().enumerate(){
-      match cell {
-        // Cell::REF(address) => {
-        //   // Once a term is flattened, the variables in the term can be replaced with the
-        //   // register associated to the variable. Thus, we ignore variables.
-        //   seen.insert(address.clone());
-        // },
-        Cell::Structure(_) =>{
-          unseen.insert(Address::from_reg_idx(index));
-        },
-        _t => {
-          unreachable!(
-            "Error: Encountered a non-variable/non-struct cell after flattening a term: {}.",
-            _t
-          );
-        }
-      }
-    }
-
-    // Now try to order the registers to maintain the invariant above.
-    loop {
-      let next_regs: HashSet<Address> =
-        unseen.iter().filter_map(
-          |address| {
-            match Self::extract_addresses(&X_ref[address.idx()]) {
-              Some(address_set)
-                if address_set.is_subset(&seen) => {
-                Some(address)
-              }
-              _v => {
-                None
-              }
-            }
-          }
-        ).cloned().collect();
-
-      for reg in next_regs{
-        ordered_ref.push(reg);
-        seen.insert(reg);
-        unseen.remove(&reg);
-      }
-
-      if unseen.is_empty() {
-        break;
-      }
-    }
-
-    ordered.clone()
-  }
-
-  /**
-    Orders the registers of a flattened term so that registers are assigned to before they are
-    used (appear on the RHS of an assignment). The order is returned in a vector.
-
-    Nothing is modified by this function. It assumes that the registers already contain a
-    flattened term. Registers containing variable terms are not included in the result.
-
-    > [F]or left-to-right code generation to be well-founded, it is necessary
-    > to order a flattened query term so as to ensure that a register name may
-    > not be used in the right-hand side of an assignment (viz., as a subterm)
-    > before its assignment, if it has one (viz., being the left-hand side).
-  */
-  /*
-  fn order_registers_old(&self) -> Vec<Address>{
-    // Contains the register arguments we've seen before.
-    let mut seen: HashSet<Address> = HashSet::new();
-    let mut unseen: HashSet<Address> = HashSet::new();
-    // The vector holding the result
-    let mut ordered: Vec<Address> = Vec::new();
-
-    // First collect which registers need to be ordered, marking registers containing variables
-    // as seen.
-    for (i, cell) in self.X.iter().enumerate(){
-      match cell {
-        Cell::Term(Term::Variable(_)) => {
-          // Once a term is flattened, the variables in the term can be replaced with the
-          // register associated to the variable. Thus, we ignore variables.
-          seen.insert(Address::from_reg_idx(i));
-        },
-        Cell::Term(Term::Structure {..})=>{
-          unseen.insert(Address::from_reg_idx(i));
-        },
-        _t => {
-          unreachable!(
-            "Error: Encountered a non-term cell register after flattening a term: {}.",
-            _t
-          );
-        }
-      }
-    }
-
-    ordered.reserve(unseen.len());
-
-    // Now try to order the registers to maintain the invariant above.
-    loop {
-      let next_regs: Vec<Address> =
-        unseen.iter().filter_map(
-          |address|
-            match self
-              .value_at(address)
-              .clone() {
-              Cell::Term(t@Term::Structure { .. })
-              if t.struct_register_addresses()
-                  .unwrap()
-                  .is_disjoint(&unseen) =>
-                {
-                  Some(*address)
-                }
-              _c => None
-            } // end match on address contents
-        ).collect();
-
-      for reg in next_regs{
-        ordered.push(reg);
-        seen.insert(reg);
-        unseen.remove(&reg);
-      }
-
-      if unseen.is_empty() {
-        break;
-      }
-    }
-
-    ordered
-  }
-
-  /**
-    Compiles the query into a sequence of instructions and interprets those instructions.
-
-    In this version of the machine, the "instructions" are just calls to `put_structure`, etc.
-    They have no concrete representation.
-  */
-  pub fn compile_query(&mut self, text: &str){
-    let ast =
-      match parser::parse(text) {
-        Term::Query(term) => term.deref().borrow().clone(),
-        _t => {
-          eprintln!("Error: Expecting Term::Query, got {}", _t);
-          Term::Empty
-        }
-      };
-    self.flatten_term(&ast);
-    let order = self.order_registers();
-    self.compile_flat_term(&order, &QUERY_OPS);
-  }
-
-  /**
-    Compiles the program into a sequence of instructions and interprets those instructions,
-    unifying with the existing query constructed on the heap and referenced by register `X1`.
-  */
-  pub fn compile_program(&mut self, text: &str){
-    let ast =
-      match parser::parse(text) {
-        Term::Program(term) => term.deref().borrow().clone(),
-        _t => {
-          eprintln!("Error: Expecting Term::Program, got {}", _t);
-          Term::Empty
-        }
-      };
-    self.flatten_term(&ast);
-    let mut order = self.order_registers();
-    order.reverse();
-    println!("After flattening and ordering:\n{:?}\n{}", order, self);
-    self.compile_flat_term(&order, &PROGRAM_OPS);
-  }
-  */
 
   /**
     Compiles a flattened query term into its in-memory representation.
 
     This function assumes that the term has been prepared with `flatten_term`.
   */
-  fn compile_flat_term(&mut self, order: &Vec<Address>, machine_ops: &MachineOps){
+  fn compile_tokens(&mut self, tokenizer: Tokenizer, machine_ops: &MachineOps){
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
-    let X_ref = self.X.clone();
-    let token_ref = self.token_stack.clone();
 
-    // We iterate over the tokens in the registers in `order`. This is an iterator over the
-    // addresses of each register/cell.
-    let tokens;
-    tokens = order.iter().flat_map(|address| {
-      let cell = X_ref.deref().borrow()[address.idx()].clone();
-      match cell {
-        // Break apart the vector of sells in Cell::Structure
-        Cell::Structure(cell_vec) => {
-          {
-            let mut tmp = token_ref.deref().borrow_mut();
-            tmp.clear();
-            tmp.append(&mut cell_vec.clone());
-          }
-          cell_vec.iter().map(|cell_inner| {
-            match cell_inner {
-              Cell::REF(address_inner) => {
-                address_inner.clone()
-              },
-              _ => address.clone(), // Should only be a functor.
-            }
-          }).collect()
-        }
-        // There shouldn't be anything else.
-        _ => vec![address.clone()]
-      }
-    });
+    /*
+
+    */
+
     #[cfg(debug_print)]
     println!("{}", self);
 
     // We iterate over the tokens in the registers in `order`.
-    for reg_ptr in tokens {
-      self.T = reg_ptr.idx();
-      let cell = RefCell::borrow(self.X.deref())[reg_ptr.idx()].clone();
-      match cell{
-        // Cell::Functor(functor)=> {
-        //   // Query:   self.put_structure(&functor, reg);
-        //   // Program: self.get_structure(&functor, reg);
-        //   (machine_ops.structure)(self, &functor, &reg_ptr);
-        // }
-        Cell::Structure(cell_vec)=> {
+    for token in tokenizer {
+      match token {
+        Token::Assignment(functor, address) => {
+
           // Query:   self.put_structure(&functor, reg);
           // Program: self.get_structure(&functor, reg);
-          if let Cell::Functor(functor) = cell_vec[0]{
-            seen.insert(reg_ptr);
-            (machine_ops.structure)(self, &functor, &reg_ptr);
-          } else{
-            unreachable!("Error: Cell:Structure doesn't start with a Cell::Functor.")
+          seen.insert(address);
+          (machine_ops.structure)(self, &functor, &address);
+
+          self.T = address.idx();
+
+          #[cfg(debug_print)]
+          {
+            // For display:
+            let token_ref = self.token_stack.clone();
+            let mut tmp = token_ref.deref().borrow_mut();
+            tmp.clear();
+            tmp.push(token);
           }
+
         }
-        _ => {
-          match seen.contains(&reg_ptr){
+        Token::Register(address) => {
+          match seen.contains(&address) {
             true => {
+
               // Already saw this register.
               // Query:   self.set_value(add);
               // Program: self.unify_value(add);
-              (machine_ops.seen_register)(self, &reg_ptr);
+              (machine_ops.seen_register)(self, &address);
+
+              #[cfg(debug_print)]
+                {
+                  // For display:
+                  let token_ref = self.token_stack.clone();
+                  let mut tmp = token_ref.deref().borrow_mut();
+                  tmp.push(token);
+                }
             }
             false => {
+
               // Have not seen this register before.
-              seen.insert(reg_ptr);
+              seen.insert(address);
               // Query:   self.set_variable(add);
               // Program: self.unify_variable(add);
-              (machine_ops.new_register)(self, &reg_ptr);
+              (machine_ops.new_register)(self, &address);
+
+              #[cfg(debug_print)]
+                {
+                  // For display:
+                  let token_ref = self.token_stack.clone();
+                  let mut tmp = token_ref.deref().borrow_mut();
+                  tmp.push(token);
+                }
+
             }
           }
         }
-      } // end match on register values
+      };
       #[cfg(debug_print)]
       println!("{}", self);
-
       if self.fail {
         break;
       };
-    } // end iterate over register tokens
+    }
   }
 
   // endregion  Compilation/Interpretation
@@ -548,7 +298,7 @@ impl WZero {
       // Do not dereference variables, which reference themselves.
       Cell::REF(a) if a != *ptr =>
         self.dereference(&a),
-      _ => ptr,
+      _ => *ptr,
     } // end match cell
   }
 
@@ -597,7 +347,8 @@ impl WZero {
     let cell = Cell::STR(Address::from_heap_idx(self.HEAP.len() + 1));
     self.HEAP.push(cell.clone());
     self.HEAP.push(Cell::Functor(*functor));
-    self.X.deref().borrow_mut()[reg_ptr.idx()] = cell;
+
+    self.set_value_at(reg_ptr, &cell);
   }
 
   /**
@@ -618,7 +369,7 @@ impl WZero {
   /**
     Push the value of the given register onto the heap.
 
-    Note: This differs from `set_value_at` in two ways:
+    Note: This differs from `set_value_at` in the following ways:
           1. The given address is the origin rather than the target of the write.
           2. A new cell is created on the top of the `HEAP`.
           3. The data is always written to the cell at the top of the `HEAP`.
@@ -690,7 +441,9 @@ impl WZero {
       Mode::Read => {
         #[cfg(debug_print)]
         println!("unify_variable({}):  {} <- H[S={}]", reg_ptr, reg_ptr, self.S);
-        self.X.borrow_mut()[reg_ptr.idx()] = self.HEAP[self.S].clone();
+        // ToDo: Extra copy here:
+        let value = &self.HEAP[self.S].clone();
+        self.set_value_at(reg_ptr, value);
       } // end if Mode::Read
       Mode::Write => {
         #[cfg(debug_print)]
@@ -733,28 +486,30 @@ impl WZero {
     PDL.push(a2);
     self.fail = false;
     while !(PDL.is_empty() || self.fail){
-      let d1 = PDL.pop().unwrap();
-      let d1 = &self.dereference(&d1);
-      let d2 = PDL.pop().unwrap();
-      let d2 = &self.dereference(&d2);
-      if d1 != d2 {
-        match (d1, d2){
+      let b1 = PDL.pop().unwrap();
+      let b1 = &self.dereference(&b1);
+      let b2 = PDL.pop().unwrap();
+      let b2 = &self.dereference(&b2);
+      let c1 = self.value_at(b1);
+      let c2 = self.value_at(b2);
+      if c1 != c2 {
+        match (&c1, &c2){
           | (Cell::REF(_),      _      )
           | (      _     , Cell::REF(_)) => {
             // One of `d1` and `d2` is a variable, and the other is either a variable or a
             // `Cell::STR` because of how functors are created on the `HEAP`.
-            self.bind(d1, d2);
+            self.bind(b1, b2);
           },
           _ => {
             // Neither `d1` nor `d2` are variables. In fact, we know that one of `d1` and `d2` is
             // a `Cell::STR` because of how functors are created on the `HEAP`.
             // println!("d1: {}\nd2: {}", d1, d2);
-            let f1 = self.extract_functor(d1);
-            let f2 = self.extract_functor(d2);
+            let f1 = self.extract_functor(b1);
+            let f2 = self.extract_functor(b2);
             if f1 == f2{
               // Since one of `d1` and `d2` is a `Cell::STR`, they both are.
-              let v1 = self.extract_address(d1).unwrap();
-              let v2 = self.extract_address(d2).unwrap();
+              let v1 = self.extract_address(&c1).unwrap();
+              let v2 = self.extract_address(&c2).unwrap();
               for n in 1..f1.unwrap().arity{
                 PDL.push(v1 + n.into());
                 PDL.push(v2 + n.into());
@@ -841,7 +596,7 @@ const PROGRAM_OPS: MachineOps = MachineOps{
   seen_register: WZero::unify_value
 };
 
-
+/*
 #[cfg(test)]
 mod tests{
   use super::*;
@@ -889,3 +644,4 @@ mod tests{
     assert_eq!(answer, expected);
   }
 }
+*/
