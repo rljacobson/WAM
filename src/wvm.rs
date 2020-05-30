@@ -19,7 +19,7 @@ use std::usize::MAX;
 type RcRefCell<T> = Rc<RefCell<T>>;
 
 #[allow(non_snake_case)]
-pub struct WZero{
+pub struct WVM {
   /// Flag indicating unification failure.
   fail : bool,
   /// Read or Write mode.
@@ -38,7 +38,7 @@ pub struct WZero{
   current_token: usize
 }
 
-impl WZero {
+impl WVM {
 
   // region Display methods
 
@@ -68,8 +68,8 @@ impl WZero {
 
   // region Low-level utility methods
   
-  pub fn new() ->WZero {
-    WZero{
+  pub fn new() -> WVM {
+    WVM {
       fail :  false,
       mode :  Mode::Write,
       S    :  0,
@@ -552,15 +552,15 @@ lazy_static! {
     .build();
 }
 
-impl Display for WZero{
+impl Display for WVM {
 
   // We print the token_stack if `trace_computation` is on.
   #[cfg(feature = "trace_computation")]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WZero::make_register_table('H', &self.HEAP, Some(self.S), 0);
-    let x_table = WZero::make_register_table('X', &self.X.deref().borrow(),Some (self.T), 1);
+    let h_table = WVM::make_register_table('H', &self.HEAP, Some(self.S), 0);
+    let x_table = WVM::make_register_table('X', &self.X.deref().borrow(), Some (self.T), 1);
 
-    let token_table = WZero::make_register_table('Y', &self.token_stack, Some(self.current_token - 1
+    let token_table = WVM::make_register_table('Y', &self.token_stack, Some(self.current_token - 1
     ), 1);
     let mut combined_table = table!([h_table, x_table, token_table]);
     combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
@@ -576,8 +576,8 @@ impl Display for WZero{
 
   #[cfg(not(feature = "trace_computation"))]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WZero::make_register_table('H', &self.HEAP, Some(self.S), 0);
-    let x_table = WZero::make_register_table('X', &self.X.deref().borrow(),Some (self.T), 1);
+    let h_table = WVM::make_register_table('H', &self.HEAP, Some(self.S), 0);
+    let x_table = WVM::make_register_table('X', &self.X.deref().borrow(), Some (self.T), 1);
 
     let mut combined_table = table!([h_table, x_table]);
     combined_table.set_titles(row![ub->"Heap", ub->"Registers"]);

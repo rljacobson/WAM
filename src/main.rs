@@ -5,7 +5,7 @@
 #[macro_use] extern crate prettytable;
 #[macro_use] extern crate lazy_static;
 
-mod wzero;
+mod wvm;
 mod cell;
 mod address;
 mod parser;
@@ -14,7 +14,7 @@ mod term;
 mod functor;
 mod token;
 
-use crate::wzero::WZero;
+use crate::wvm::WVM;
 
 fn main() {
   #[cfg(feature = "trace_computation")]
@@ -25,7 +25,7 @@ fn main() {
   println!("Query Expression: {}", text);
   // println!("Parse Tree:\n{}\n", ast);
 
-  let mut machine = WZero::new();
+  let mut machine = WVM::new();
   machine.compile(text);
 
   // println!("Internal Machine State:\n{}", machine);
