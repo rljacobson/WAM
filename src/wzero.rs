@@ -11,9 +11,10 @@ use std::rc::Rc;
 use prettytable::{format as TableFormat, Table};
 
 use crate::address::Address;
-use crate::cell::Cell;
+use crate::cell::{Cell, CellVec};
 use crate::functor::Functor;
 use crate::token::*;
+use std::usize::MAX;
 
 type RcRefCell<T> = Rc<RefCell<T>>;
 
@@ -32,7 +33,9 @@ pub struct WZero{
   /// Query Registers
   X    : RcRefCell<Vec<Cell>>,
   #[cfg(feature = "trace_computation")]
-  token_stack: RcRefCell<Vec<Token>>,
+  token_stack: CellVec,
+  #[cfg(feature = "trace_computation")]
+  current_token: usize
 }
 
 impl WZero {
@@ -72,9 +75,11 @@ impl WZero {
       S    :  0,
       T    :  0,
       HEAP :  vec![],
-      #[cfg(feature = "trace_computation")]
-      token_stack: Rc::new(RefCell::new(vec![])),
       X    :  Rc::new(RefCell::new(vec![])),
+      #[cfg(feature = "trace_computation")]
+      token_stack: Rc::new(vec![]),
+      #[cfg(feature = "trace_computation")]
+      current_token: MAX,
     }
   }
 
@@ -194,7 +199,16 @@ impl WZero {
     let mut seen: HashSet<Address> = HashSet::new();
 
     #[cfg(feature = "trace_computation")]
-    println!("{}", self);
+      {
+        self.token_stack = Rc::new(
+          tokenizer.order
+                   .iter()
+                   .map( |a| {tokenizer.cell_vec[a.idx()].clone()})
+                   .collect()
+        );
+        println!("{}", self);
+        self.current_token = 0;
+      }
 
     // We iterate over the tokens in the registers in `order`.
     for token in tokenizer {
@@ -212,16 +226,11 @@ impl WZero {
             }
           }
 
-          self.T = address.idx();
-
           #[cfg(feature = "trace_computation")]
           {
-            // For display:
-            let token_ref = self.token_stack.clone();
-            let mut tmp = token_ref.deref().borrow_mut();
-            tmp.clear();
-            tmp.push(token);
+            self.current_token += 1;
           }
+          self.T = address.idx();
 
         }
 
@@ -241,14 +250,6 @@ impl WZero {
                 }
 
               }
-
-              #[cfg(feature = "trace_computation")]
-                {
-                  // For display:
-                  let token_ref = self.token_stack.clone();
-                  let mut tmp = token_ref.deref().borrow_mut();
-                  tmp.push(token);
-                }
             }
 
             false => {
@@ -265,14 +266,6 @@ impl WZero {
                 }
 
               }
-
-              #[cfg(feature = "trace_computation")]
-                {
-                  // For display:
-                  let token_ref = self.token_stack.clone();
-                  let mut tmp = token_ref.deref().borrow_mut();
-                  tmp.push(token);
-                }
             }
 
           } // end if seen address before
@@ -567,7 +560,8 @@ impl Display for WZero{
     let h_table = WZero::make_register_table('H', &self.HEAP, Some(self.S), 0);
     let x_table = WZero::make_register_table('X', &self.X.deref().borrow(),Some (self.T), 1);
 
-    let token_table = WZero::make_register_table('Y', &self.token_stack.deref().borrow(), None, 1);
+    let token_table = WZero::make_register_table('Y', &self.token_stack, Some(self.current_token - 1
+    ), 1);
     let mut combined_table = table!([h_table, x_table, token_table]);
     combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
