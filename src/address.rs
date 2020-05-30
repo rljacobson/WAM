@@ -1,3 +1,6 @@
+//! An `Either` type that holds the address of either a register or memory, with some convenience
+//! functions.
+
 use std::ops::Add;
 use std::fmt::{Display, Formatter};
 
@@ -31,21 +34,33 @@ impl Address {
     Address::RegPtr((reg_idx + 1) as AddressType)
   }
 
-  // Panics if the address is not a register pointer.
+  /// Panics if the address is not a register pointer.
   pub fn require_register(&self){
     if let Address::CellPtr(_) = self{
-      unreachable!("Error: A heap pointer was given when a register pointer was required: {}",
-                   self);
+      unreachable!(
+        "Error: A heap pointer was given when a register pointer was required: {}",
+        self
+      );
     }
   }
 
-  // Panics if the address is not a heap pointer.
+  /// Panics if the address is not a heap pointer.
+  #[allow(dead_code)]
   pub fn require_heap(&self){
     if let Address::RegPtr(_) = self{
-      unreachable!("Error: A register pointer was given when a heap pointer was required: {}",
-                   self);
+      unreachable!(
+        "Error: A register pointer was given when a heap pointer was required: {}",
+        self);
     }
   }
+
+  pub fn is_register(&self) -> bool {
+    match self {
+      Address::RegPtr(_) => true,
+      _ => false
+    }
+  }
+
 }
 
 
@@ -62,13 +77,7 @@ impl Display for Address{
   }
 }
 
-// region Boilerplate type coercion pointer arithmetic
-// impl From<AddressType> for Address {
-//   fn from(i: AddressType) -> Self {
-//     Address::CellPtr(i as AddressType)
-//   }
-// }
-
+// Increment an address
 impl Add<AddressType> for Address{
   type Output = Address;
   fn add(self, rhs: AddressType) -> Address{
@@ -82,65 +91,4 @@ impl Add<AddressType> for Address{
     }
   }
 }
-/*
-impl Add for Address{
-  type Output = Self;
-  fn add(self, other: Address) -> Address{
-    match self{
-      Address::CellPtr(i) => {
-        match other{
-          Address::CellPtr(j) => {
-            Address::CellPtr(i+j)
-          },
-          Address::RegPtr(j) => {
-            // Undefined behavior!
-            unreachable!();
-            // Address::CellPtr(i+j)
-          }
-        }
-      },
-      Address::RegPtr(i) => {
-        match other{
-          Address::RegPtr(j) => {
-            Address::RegPtr(i+j)
-          },
-          Address::CellPtr(j) => {
-            // Undefined behavior!
-            unreachable!();
-            // Address::CellPtr(i+j)
-          }
-        }
-      }
-    }
-  }
-}
-impl Add<ArityType> for Address{
-  type Output = Address;
-  fn add(self, rhs: ArityType) -> Address{
-    match self{
-      Address::CellPtr(i) => {
-        Address::CellPtr(i + rhs as AddressType)
-      },
-      Address::RegPtr(i) => {
-        Address::RegPtr(i + rhs as AddressType)
-      }
-    }
-  }
-}
-impl Add<i32> for Address{
-  type Output = Address;
-  fn add(self, rhs: i32) -> Address{
-    match self{
-      Address::CellPtr(i) => {
-        Address::CellPtr(i + rhs as usize)
-      },
-      Address::RegPtr(i) => {
-        Address::RegPtr(i + rhs as usize)
-      }
-    }
-  }
-}
-
-*/
-//endregion
 

@@ -1,5 +1,5 @@
 #![feature(type_ascription, pattern)]
-#![allow(dead_code)]
+// #![allow(dead_code)]
 // ToDo: Remove the above `allow` attribute.
 
 #[macro_use] extern crate prettytable;
@@ -17,8 +17,8 @@ mod token;
 use crate::wzero::WZero;
 
 fn main() {
-  #[cfg(debug_print)]
-  println!("debug_print ENABLED");
+  #[cfg(feature = "trace_computation")]
+  println!("Computation Tracing ENABLED");
 
   let text = "?-p(Z,h(Z,W),f(W))";
   // let ast = parser::parse(text);

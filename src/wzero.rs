@@ -13,10 +13,7 @@ use prettytable::{format as TableFormat, Table};
 use crate::address::Address;
 use crate::cell::Cell;
 use crate::functor::Functor;
-use crate::parser::parse;
-use crate::term::{BoxTerm, Term};
 use crate::token::*;
-use crate::token;
 
 type RcRefCell<T> = Rc<RefCell<T>>;
 
@@ -34,10 +31,8 @@ pub struct WZero{
   HEAP : Vec<Cell>,
   /// Query Registers
   X    : RcRefCell<Vec<Cell>>,
-  #[cfg(debug_print)]
+  #[cfg(feature = "trace_computation")]
   token_stack: RcRefCell<Vec<Token>>,
-  /// Holds the address of the query.
-  query_address: Address
 }
 
 impl WZero {
@@ -77,10 +72,9 @@ impl WZero {
       S    :  0,
       T    :  0,
       HEAP :  vec![],
-      #[cfg(debug_print)]
+      #[cfg(feature = "trace_computation")]
       token_stack: Rc::new(RefCell::new(vec![])),
       X    :  Rc::new(RefCell::new(vec![])),
-      query_address: Address::CellPtr(0)
     }
   }
 
@@ -148,8 +142,8 @@ impl WZero {
   // region Compilation/Interpretation
 
   /**
-    Accepts a program or query as a string and turns it into a sequences of operations or an
-    in-memory representation.
+    Accepts a program or query as a string and turns it into
+    a sequences of operations or an in-memory representation.
 
     The compilation pipeline is this:
 
@@ -163,43 +157,30 @@ impl WZero {
 
       ⋯-> [`unify`] -> Success/Fail
 
-    The [`unify`] step is part of `compile_tokens` and interprets the instructions to build the
-    in-memory `Cell`s.
+    The [`unify`] step is part of `compile_tokens` and interprets the
+    instructions to build the in-memory `Cell`s. The conversion to
+    `Cell`s, then `Token`s, and back to `Cell`s again is for two reasons:
+
+     1. Because the term needs to be flattened and reordered, we would
+        have the "conversion" step no matter what.
+
+     2. Conversion from AST to `Cell`s allows us to
+        build in-memory representations directly "by hand."
 
   */
   pub fn compile(&mut self, text: &str){
-    let ast: BoxTerm = parse(text);
+    match text.starts_with("?-") {
 
-    // The first term determines whether we are compiling a Query or a Program.
-    let is_program: bool;
-    let root_term = match *ast {
-      Term::Program(p) => {
-        is_program = true;
-        p
-      },
-      Term::Query(q)   => {
-        is_program = false;
-        q
-      },
-      _t                     => {
-        panic!("Error: Compile takes either a query or a program but was given {}.", _t);
-      }
-    };
-
-    // STEP 1&2: Flatten (and order) the term.
-    let (flattened, mut order) = token::flatten_term(root_term);
-
-    // STEP 3: Emit or interpret code.
-    match is_program {
       true => {
-        order.reverse(); // Programs are ordered reverse of queries.
-        let tokenizer = Tokenizer::new(flattened, order);
-        self.compile_tokens(tokenizer, &PROGRAM_OPS);
+        let tokenizer = Tokenizer::new_query(&text[2..]);
+        self.compile_tokens(tokenizer, false);
       }
+
       false => {
-        let tokenizer = Tokenizer::new(flattened, order);
-        self.compile_tokens(tokenizer, &QUERY_OPS);
+        let tokenizer = Tokenizer::new_program(text);
+        self.compile_tokens(tokenizer, true);
       }
+
     }
   }
 
@@ -208,30 +189,32 @@ impl WZero {
 
     This function assumes that the term has been prepared with `flatten_term`.
   */
-  fn compile_tokens(&mut self, tokenizer: Tokenizer, machine_ops: &MachineOps){
+  fn compile_tokens(&mut self, tokenizer: Tokenizer, is_program: bool){
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
 
-    /*
-
-    */
-
-    #[cfg(debug_print)]
+    #[cfg(feature = "trace_computation")]
     println!("{}", self);
 
     // We iterate over the tokens in the registers in `order`.
     for token in tokenizer {
       match token {
+
         Token::Assignment(functor, address) => {
 
-          // Query:   self.put_structure(&functor, reg);
-          // Program: self.get_structure(&functor, reg);
           seen.insert(address);
-          (machine_ops.structure)(self, &functor, &address);
+          match is_program {
+            true => {  // Program
+              self.get_structure(&functor, &address);
+            }
+            false => { // Query
+              self.put_structure(&functor, &address);
+            }
+          }
 
           self.T = address.idx();
 
-          #[cfg(debug_print)]
+          #[cfg(feature = "trace_computation")]
           {
             // For display:
             let token_ref = self.token_stack.clone();
@@ -241,16 +224,25 @@ impl WZero {
           }
 
         }
+
         Token::Register(address) => {
           match seen.contains(&address) {
+
             true => {
-
               // Already saw this register.
-              // Query:   self.set_value(add);
-              // Program: self.unify_value(add);
-              (machine_ops.seen_register)(self, &address);
+              match is_program {
 
-              #[cfg(debug_print)]
+                true => {  // Program
+                  self.unify_value(&address);
+                }
+
+                false => { // Query
+                  self.set_value(&address);
+                }
+
+              }
+
+              #[cfg(feature = "trace_computation")]
                 {
                   // For display:
                   let token_ref = self.token_stack.clone();
@@ -258,32 +250,41 @@ impl WZero {
                   tmp.push(token);
                 }
             }
-            false => {
 
+            false => {
               // Have not seen this register before.
               seen.insert(address);
-              // Query:   self.set_variable(add);
-              // Program: self.unify_variable(add);
-              (machine_ops.new_register)(self, &address);
+              match is_program {
 
-              #[cfg(debug_print)]
+                true => {  // Program
+                  self.unify_variable(&address);
+                }
+
+                false => { // Query
+                  self.set_variable(&address);
+                }
+
+              }
+
+              #[cfg(feature = "trace_computation")]
                 {
                   // For display:
                   let token_ref = self.token_stack.clone();
                   let mut tmp = token_ref.deref().borrow_mut();
                   tmp.push(token);
                 }
-
             }
-          }
+
+          } // end if seen address before
+
         }
-      };
-      #[cfg(debug_print)]
+      } // end match on token type
+      #[cfg(feature = "trace_computation")]
       println!("{}", self);
       if self.fail {
         break;
       };
-    }
+    } // end iterate over tokens
   }
 
   // endregion  Compilation/Interpretation
@@ -307,22 +308,35 @@ impl WZero {
      is bound to the second (arbitrarily).
   */
   fn bind(&mut self, add1: &Address, add2: &Address){
-    #[cfg(debug_print)]
-    println!("bind({}, {}): ", add1, add2);
+    #[cfg(feature = "trace_computation")]
+    print!("bind({}, {}): ", add1, add2);
     let cell1 = self.value_at(add1);
     let cell2 = self.value_at(add2);
 
     match (cell1, cell2){
-      // | (Cell::Empty, Cell::REF(_))
-      // | (Cell::Empty, Cell::STR(add))
-      (Cell::REF(add), _) if *add1 == add => {
-        // `cell1` is a variable. Bind to cell2.
+      // There are four branches instead of two in order to prefer binding a variable in a
+      // register to a variable on the heap over the reverse.
+      (Cell::REF(add), _) if *add1 == add && add1.is_register() => {
+        // `cell1` is a register variable. Bind to cell2.
+        #[cfg(feature = "trace_computation")]
         println!("Binding {} to {}", add1, add2);
         self.set_value_at(&add1, &Cell::REF(*add2));
       },
-      // | (_, Cell::Empty)
+      (_, Cell::REF(add)) if *add2 == add && add2.is_register() => {
+        // `cell2` is a register variable. Bind to cell1.
+        #[cfg(feature = "trace_computation")]
+        println!("Binding {} to {}", add2, add1);
+        self.set_value_at(&add2, &Cell::REF(*add1));
+      },
+      (Cell::REF(add), _) if *add1 == add => {
+        // `cell1` is a variable. Bind to cell2.
+        #[cfg(feature = "trace_computation")]
+        println!("Binding {} to {}", add1, add2);
+        self.set_value_at(&add1, &Cell::REF(*add2));
+      },
       (_, Cell::REF(add)) if *add2 == add => {
         // `cell2` is a variable. Bind to cell1.
+        #[cfg(feature = "trace_computation")]
         println!("Binding {} to {}", add2, add1);
         self.set_value_at(&add2, &Cell::REF(*add1));
       },
@@ -342,7 +356,7 @@ impl WZero {
   */
   fn put_structure(& mut self, functor: &Functor, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(debug_print)]
+    #[cfg(feature = "trace_computation")]
     println!("put_structure({}, {})", functor, reg_ptr);
     let cell = Cell::STR(Address::from_heap_idx(self.HEAP.len() + 1));
     self.HEAP.push(cell.clone());
@@ -359,7 +373,7 @@ impl WZero {
   */
   fn set_variable(&mut self, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(debug_print)]
+    #[cfg(feature = "trace_computation")]
     println!("set_variable({})", reg_ptr);
     let cell = Cell::REF( Address::from_heap_idx( self.HEAP.len()) );
     self.HEAP.push(cell.clone());
@@ -377,7 +391,7 @@ impl WZero {
   */
   fn set_value(&mut self, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(debug_print)]
+    #[cfg(feature = "trace_computation")]
     println!("set_value({})", reg_ptr);
     self.HEAP.push(self.value_at(reg_ptr));
   }
@@ -396,7 +410,7 @@ impl WZero {
       Cell::REF(_) => {
         // A variable. Create a new functor structure for `funct` on the stack and bind the
         // variable to the functor.
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         println!("get_structure({}, {}): creating struct", funct, reg_ptr);
         let funct_add = Address::from_heap_idx(self.HEAP.len() + 1);
         let cell = Cell::STR(funct_add);
@@ -408,20 +422,20 @@ impl WZero {
       Cell::STR(cell_ptr @ Address::CellPtr(_)) => {
         // A pointer to a functor.
         if self.HEAP[cell_ptr.idx()] == Cell::Functor(*funct) {
-          #[cfg(debug_print)]
+          #[cfg(feature = "trace_computation")]
           println!("get_structure({}, {}): functor already on stack", funct, reg_ptr);
           self.S = cell_ptr.idx() + 1;
           self.mode = Mode::Read;
         } else{
           // Failed to unify
-          #[cfg(debug_print)]
+          #[cfg(feature = "trace_computation")]
           println!("get_structure({}, {}) - STR points to nonexistent functor", funct, reg_ptr);
           self.fail = true;
         }
       },
       _ => {
         // Failed to unify
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         println!("get_structure({}, {}) - neither REF nor STR found: {}", funct, reg_ptr, address);
         self.fail = true;
       }
@@ -439,14 +453,14 @@ impl WZero {
 
     match self.mode {
       Mode::Read => {
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         println!("unify_variable({}):  {} <- H[S={}]", reg_ptr, reg_ptr, self.S);
         // ToDo: Extra copy here:
         let value = &self.HEAP[self.S].clone();
         self.set_value_at(reg_ptr, value);
       } // end if Mode::Read
       Mode::Write => {
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         print!("unify_variable({}):  ", reg_ptr);
         self.set_variable(reg_ptr)
       } // end if Mode::Write
@@ -465,12 +479,12 @@ impl WZero {
 
     match self.mode {
       Mode::Read => {
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         println!("unify_value({}):  unifying", reg_ptr);
         self.unify(*reg_ptr, Address::from_heap_idx(self.S));
       }
       Mode::Write => {
-        #[cfg(debug_print)]
+        #[cfg(feature = "trace_computation")]
         print!("unify_value({}):  ", reg_ptr);
         self.set_value(reg_ptr);
       }
@@ -546,17 +560,41 @@ lazy_static! {
 }
 
 impl Display for WZero{
+
+  // We print the token_stack if `trace_computation` is on.
+  #[cfg(feature = "trace_computation")]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let h_table = WZero::make_register_table('H', &self.HEAP, Some(self.S), 0);
     let x_table = WZero::make_register_table('X', &self.X.deref().borrow(),Some (self.T), 1);
+
     let token_table = WZero::make_register_table('Y', &self.token_stack.deref().borrow(), None, 1);
-    let mut table =
-      table!([h_table, x_table, token_table]);
+    let mut combined_table = table!([h_table, x_table, token_table]);
+    combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
+    combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    table.set_format(*TABLE_DISPLAY_FORMAT);
-    table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
+    let success = match self.fail{
+      true => "Failed to unify.",
+      false => "Unifying successfully."
+    };
 
-    write!(f, "Mode: {}\tFailed: {}\n{}", self.mode, self.fail, table)
+    write!(f, "Mode: {}\n{}\n{}", self.mode, success, combined_table)
+  }
+
+  #[cfg(not(feature = "trace_computation"))]
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    let h_table = WZero::make_register_table('H', &self.HEAP, Some(self.S), 0);
+    let x_table = WZero::make_register_table('X', &self.X.deref().borrow(),Some (self.T), 1);
+
+    let mut combined_table = table!([h_table, x_table]);
+    combined_table.set_titles(row![ub->"Heap", ub->"Registers"]);
+    combined_table.set_format(*TABLE_DISPLAY_FORMAT);
+
+    let success = match self.fail{
+      true => "Failed to unify.",
+      false => "Unifying successfully."
+    };
+
+    write!(f, "Mode: {}\t{}\n{}", self.mode, success, combined_table)
   }
 }
 
@@ -577,71 +615,3 @@ impl Display for Mode{
     }
   }
 }
-
-struct MachineOps{
-  structure: fn(&mut WZero, &Functor, &Address),
-  new_register: fn(&mut WZero, &Address),
-  seen_register: fn(&mut WZero, &Address),
-}
-
-const QUERY_OPS: MachineOps = MachineOps{
-  structure: WZero::put_structure,
-  new_register: WZero::set_variable,
-  seen_register: WZero::set_value
-};
-
-const PROGRAM_OPS: MachineOps = MachineOps{
-  structure: WZero::get_structure,
-  new_register: WZero::unify_variable,
-  seen_register: WZero::unify_value
-};
-
-/*
-#[cfg(test)]
-mod tests{
-  use super::*;
-
-  // #[test]
-  // Test breaks because IDE eats the whitespace in the copied+pasted expected text.
-  fn query_compiles(){
-    // The expression below must have a single unique flattened ordering.
-    let text = "?-p(Z,h(Z,W),f(h(W, Z)))";
-    let mut machine = WZero::new();
-    machine.compile_query(text);
-
-    // Check heap contents.
-    let table = machine.make_heap_table();
-    let answer = format!("{}", table);
-    let expected = "  Address   │ Contents
- ───────────┼────────────────
-  S ──→ 0:  │ <STR, HEAP[1]>
-        1:  │ h/2
-        2:  │ <REF, HEAP[2]>
-        3:  │ <REF, HEAP[3]>
-        4:  │ <STR, HEAP[5]>
-        5:  │ f/1
-        6:  │ <STR, HEAP[1]>
-        7:  │ <STR, HEAP[8]>
-        8:  │ p/3
-        9:  │ <REF, HEAP[2]>
-       10:  │ <STR, HEAP[1]>
-       11:  │ <STR, HEAP[5]>
- ───────────┴────────────────
-".to_string();
-    assert_eq!(answer, expected);
-
-    // Check register contents.
-    let table = machine.make_register_table();
-    let answer = format!("{}", table);
-    let expected = "  Address │ Contents
- ─────────┼────────────────
-     X1 = │ <STR, HEAP[8]>
-     X2 = │ <REF, HEAP[2]>
-     X3 = │ <STR, HEAP[1]>
-     X4 = │ <STR, HEAP[5]>
-     X5 = │ <REF, HEAP[3]>
- ─────────┴────────────────".to_string();
-    assert_eq!(answer, expected);
-  }
-}
-*/

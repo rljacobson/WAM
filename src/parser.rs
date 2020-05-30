@@ -27,33 +27,33 @@ use std::rc::Rc;
 use crate::address::Address;
 use crate::chariter::CharIter;
 use crate::functor::{ArityType, Functor};
-use crate::term;
-use crate::term::{BoxTerm, RcTerm, Term, TermVec};
+use crate::term::{RcTerm, Term, TermVec};
 
 static WARN_ON_X_VAR: bool = false;
 
-
-pub fn parse<'b>(mut input: &'b str) -> BoxTerm{
+/// Parses text to produce an abstract syntax tree made of `Term`s.
+pub fn parse<'b>(input: &'b str) -> RcTerm{
   if input.is_empty() {
-    return Box::new(Term::Empty);
+    return Rc::new(Term::Empty);
   }
 
+  /*
   let mut is_query = false;
   if input.starts_with("?-"){
     // Query
     is_query = true;
     input = &input[2..];
   }
+  */
 
   // We need multiple mutable borrows for recursive calls to parsing functions.
-  // If we needed to keep a reference to the original, we could use an `OwningRef`.
   let text_ref: Box<RefCell<CharIter>> =
     Box::new(
       RefCell::new(
         CharIter::<'b>::new(input)
       )
     );
-  let inner = parse_aux(&text_ref);
+  let ast = parse_aux(&text_ref);
   let mut text = RefCell::borrow_mut(&*text_ref);
 
   // Allow trailing whitespace, but nothing more.
@@ -63,10 +63,7 @@ pub fn parse<'b>(mut input: &'b str) -> BoxTerm{
     panic!();
   }
 
-  match is_query{
-    true => term::to_query(inner),
-    false => term::to_program(inner)
-  }
+  ast
 }
 
 
