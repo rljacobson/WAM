@@ -56,10 +56,32 @@ We will encode our initial facts in such a way that our conclusions, or *goal cl
 
 This is why we are actually building an interpreter—a virtual machine, actually—for a programming language. It turns out that the programming language will be Turing complete. 
 
+## The code from 10,000 feet
+
+The program is a primitive interpreter running on a register based virtual machine. Most of the effort is spent on the basic parsing and tokenization facilities, as simple as they are. The compilation pipeline is:
+
+```
+text -> [`parser::parse`] -> `Term`s ->⋯
+
+    ┌───────────────[`token::flatten_term`]────────────────┐
+⋯->*│*-> [`TermIter`] -> `Cell`s -> [`order_registers`] ->*│*->⋯
+    └──────────────────────────────────────────────────────┘
+
+⋯-> `Token`s -> [`compile_tokens`] -> `Cell`s/instructions ->⋯
+
+⋯-> [`unify`] -> Success/Fail
+```
+
+The `[unify]` step is actually part of `[compile_tokens]` and, at first, interprets the instructions to build the in-memory `Cell`s. The apparently redundant conversion to `Cell`s, then `Token`s, and back to `Cell`s again is for two reasons:
+
+  1. Because the term needs to be flattened and reordered, we would have the "conversion" step no matter what.
+  2. Conversion from AST to `Cell`s allows us to build in-memory representations directly "by hand.”
+
+Other reasonable designs are certainly possible. Indeed, I would love to see how you improve on this code. The concerns of tokenization and compilation/interpretation are separated: The `token` module houses the code to generate the token stream, while the compiler/interpreter are functions of the virtual machine housed in `wvm.rs`. The `Term`, `Cell`, and `Token` intermediate representations are defined in their corresponding module source files, `term.rs`, `cell.rs`, and `token.rs` respectively. 
+
 # Further Reading
 
-This whole project was inspired by Hassan Aït-kaci's charming
-book *[Warren's Abstract Machine: A Tutorial Reconstruction](http://wambook.sourceforge.net/).* The Wikipedia articles on these and related topics are generally very good and well cited.
+This whole project was inspired by Hassan Aït-kaci's charming book *[Warren's Abstract Machine: A Tutorial Reconstruction](http://wambook.sourceforge.net/).* The Wikipedia articles on these and related topics are generally very good and well cited.
 
 * [Resolution](https://en.wikipedia.org/wiki/Resolution_(logic))
 * [Selective Linear Definite Resolution](https://en.wikipedia.org/wiki/SLD_resolution#SLDNF)
