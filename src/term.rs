@@ -48,7 +48,7 @@ impl Term{
     match self {
       Term::Structure{ functor, args } => {
         let mut buffer =
-          if functor.is_constant() {
+          if functor.arity == 0 {
             format!("{}Constant<{}>", prefix, functor.name)
           } else{
             format!("{}Functor<{}(…)>\n", prefix, functor)
@@ -83,18 +83,8 @@ impl Term{
       Term::Variable(c) => {
         format!("{}Variable<{}>", prefix, c)
       },
-      /*
-      Term::Program(term) => {
-        format!("Program\n-------\n{}", term)
-      },
-      Term::Query(term) => {
-        format!("Query\n-------\n{}", term)
-      }
-
-      */
-    } // end match self
+    }
   }
-
 }
 
 // endregion Term
@@ -119,24 +109,22 @@ impl Iterator for TermIter{
   type Item = RcTerm;
 
   fn next(&mut self) -> Option<Self::Item> {
-    let current = self.terms.pop_front();
-    match &current {
-      Some(rc) => {
-        match &**rc{
+    let option_term = self.terms.pop_front();
+    match &option_term {
+
+      Some(rc_term) => {
+        match &**rc_term {
+
           Term::Structure{args, ..} => {
-            for term in args.iter(){
-              self.terms.push_back(term.clone());
-            };
-            current
+            self.terms.extend(args.iter().cloned());
+            option_term
           },
-          _t => {
-            current
-          }
+
+          _t => option_term
         }
-      },
-      None => {
-        None
       }
+
+      None => None
     }
   }
 }
@@ -145,6 +133,9 @@ impl Iterator for TermIter{
 
 #[cfg(test)]
 mod tests {
+  use super::*;
+  use crate::functor::ArityType;
+
   pub fn make_struct(name: char, v: &TermVec) -> RcTerm {
     let new_vec = v.clone();
 

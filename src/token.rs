@@ -65,7 +65,8 @@ impl Display for Token{
 pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   let mut seen: HashMap<RcTerm, Address> = HashMap::new();
 
-  //  We visit the AST breadth first, adding new symbols to `seen` as we go.
+  // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
+  // term its own register.
   let terms: TermIter = TermIter::new(&ast);
   for term in terms{
     if !seen.contains_key(&term){
@@ -97,7 +98,8 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
       }
 
       _t => {
-        // This should never happen in correct code.
+        // This should never happen in correct code during compilation but may be useful for
+        // other reasons, e.g., testing.
         registers[reg_ptr.idx()] = Rc::new(Cell::Term(term.clone()));
       }
 
@@ -124,11 +126,9 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
 
 
 /**
-  Orders the registers of a flattened term so that registers are assigned to before
-  they are used (appear on the RHS of an assignment). The order is done in-place.
-
-  This function assumes that the registers already contain a flattened
-  term. Registers containing variable terms are not included in the result.
+  Orders the registers of a flattened term so that registers are assigned
+  to before they are used (appear on the RHS of an assignment). This
+  function assumes that the registers already contain a flattened term.
 
   > [F]or left-to-right code generation to be well-founded, it is necessary
   > to order a flattened query term to ensure that a register name may
