@@ -1,6 +1,6 @@
 # Let’s write an automated theorem prover!
 
-This is meant to be a series of articles about implementing an automated theorem prover. The theorem prover is realized by implementing a Prolog-like language in Rust using Warren’s Abstract Machine. The `M_n` branches are for different versions of the VM of increasing complexity in `n`.
+This is meant to be a series of articles about implementing an automated theorem prover. The theorem prover is realized by implementing a Prolog-like language in Rust using Warren’s Abstract Machine. The `M_n` branches are for different versions of the virtual machine of increasing complexity in `n`. The `docs` branch is where I write the articles linked below. I merge `docs` back into `master` on a periodic basis. 
 
 1. [Introduction](doc/introduction.md)
 2. [Supporting infrastructure: parsing and flattening terms](doc/infrastructure.md)
@@ -12,6 +12,10 @@ If you would like to work along with me, I encourage you to use whichever progra
 
 Issues and pull requests are welcome, whether to report or fix errors *or* to suggest general improvements. There is *always* a better way to teach or do something!
 
+Sincerely,
+
+Robert Jacobson
+
 ### Text License
 
 <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/"><img
@@ -21,8 +25,6 @@ under a <a rel="license" href="http://creativecommons.org/licenses/by-sa/4.0/">C
 Commons Attribution-ShareAlike 4.0 International License</a>.
 
 ### Software License
-
-
 
 This software is released under the MIT license:
 
