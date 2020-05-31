@@ -1,6 +1,6 @@
-//! Structures and functions for the Warren Abstract Machine
+//! Structures and functions for the Warren Virtual Machine, what I'm calling an
+//! implementation of Warren's Abstract Machine.
 #![allow(non_snake_case)]
-// #![allow(dead_code)]
 
 use std::cell::RefCell;
 use std::collections::HashSet;
@@ -151,17 +151,17 @@ impl WVM {
     a sequences of operations or an in-memory representation.
 
     The compilation pipeline is this:
+    ```
+    text -> [`parser::parse`] -> `Term`s ->⋯
 
-      text -> [`parser::parse`] -> `Term`s ->⋯
+        ┌───────────────[`token::flatten_term`]────────────────┐
+    ⋯->*│*-> [`TermIter`] -> `Cell`s -> [`order_registers`] ->*│*->⋯
+        └──────────────────────────────────────────────────────┘
 
-          ┌───────────────[`token::flatten_term`]────────────────┐
-      ⋯->*│*-> [`TermIter`] -> `Cell`s -> [`order_registers`] ->*│*->⋯
-          └──────────────────────────────────────────────────────┘
+    ⋯-> `Token`s -> [`compile_tokens`] -> `Cell`s/instructions ->⋯
 
-      ⋯-> `Token`s -> [`compile_tokens`] -> `Cell`s/instructions ->⋯
-
-      ⋯-> [`unify`] -> Success/Fail
-
+    ⋯-> [`unify`] -> Success/Fail
+    ```
     The [`unify`] step is part of `compile_tokens` and interprets the
     instructions to build the in-memory `Cell`s. The conversion to
     `Cell`s, then `Token`s, and back to `Cell`s again is for two reasons:

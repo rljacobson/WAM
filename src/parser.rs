@@ -16,8 +16,9 @@ Whitespace is ignored. It is an error to have two terms adjacent except if separ
 as part of a functor. We allow `X` as a variable name but emit a warning. We allow
 comma-delineated lists to have a trailing comma without warning.
 
-The internal representation of a functor is a structure, which has a name and a list of arguments.
-Constants are represented as a structure with a zero-length argument list.
+The internal representation of a functor is a (functor) structure, which has a name and
+a list of arguments, themselves `Terms`. This is the only tree-like (recursive) `Term`
+variant. Constants are represented as a structure with a zero-length argument list.
 
 */
 
@@ -33,18 +34,15 @@ static WARN_ON_X_VAR: bool = false;
 
 /// Parses text to produce an abstract syntax tree made of `Term`s.
 pub fn parse<'b>(input: &'b str) -> RcTerm{
+  // A caller intending to compile the term should have done this already, but the parse function
+  // may be called for other reasons, e.g., to print out the AST.
+  let input =
+    if input.starts_with("?-"){ &input[2..] }
+    else { input };
+
   if input.is_empty() {
     return Rc::new(Term::Empty);
   }
-
-  /*
-  let mut is_query = false;
-  if input.starts_with("?-"){
-    // Query
-    is_query = true;
-    input = &input[2..];
-  }
-  */
 
   // We need multiple mutable borrows for recursive calls to parsing functions.
   let text_ref: Box<RefCell<CharIter>> =
@@ -108,7 +106,7 @@ fn parse_aux(text_ref: &Box<RefCell<CharIter>>) -> RcTerm {
           )
         ))
     } else {
-      // A variable, not a register. Warn about strange use of `X`.
+      // A variable, not a register. Warn about potentially confusing use of `X`.
       if WARN_ON_X_VAR {
         eprintln!("Warning: `X` used as a variable, which should be avoided.");
       }
