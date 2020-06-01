@@ -4,15 +4,17 @@
 
 #[macro_use] extern crate prettytable;
 #[macro_use] extern crate lazy_static;
-
+extern crate strum;
+#[macro_use] extern crate strum_macros;
 mod wvm;
 mod cell;
 mod address;
 mod parser;
 mod chariter;
-mod term;
 mod functor;
+mod term;
 mod token;
+mod instructions;
 
 use crate::wvm::WVM;
 
