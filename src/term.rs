@@ -1,12 +1,13 @@
 //! The abstract syntax tree type for programs and queries.
+#![allow(dead_code)]
 
 use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
+use string_cache::DefaultAtom;
 
 use crate::functor::Functor;
-use crate::address::Address;
 
 pub type RcTerm = Rc<Term>;
 pub type TermVec = Rc<Vec<Rc<Term>>>;
@@ -17,19 +18,15 @@ pub type TermVec = Rc<Vec<Rc<Term>>>;
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Term {
   /// An uppercase letter.
-  Variable(char),
+  Variable(DefaultAtom),
   Structure {
     functor: Functor,
     args: TermVec
   },
-  /*
-  /// Top-most term for non-queries.
+  /// A top-level term for non-queries.
   Program(RcTerm),
-  /// Denoted `?-q` ("What `q`"), a non-variable term.
+  /// Denoted `?-q` ("What `q`"), a top-level term for queries.
   Query(RcTerm),
-  */
-  /// An X followed by a number, used only internally to process terms.
-  Register(Address),
   /// Structures hold functors. Constants are represented as functors of arity 0, so `args` might
   /// be an empty `Vec`.
   /// Epsilon is the empty Term, used only to indicate that there was nothing to parse.
@@ -48,7 +45,7 @@ impl Term{
     match self {
       Term::Structure{ functor, args } => {
         let mut buffer =
-          if functor.arity == 0 {
+          if args.is_empty() {
             format!("{}Constant<{}>", prefix, functor.name)
           } else{
             format!("{}Functor<{}(…)>\n", prefix, functor)
@@ -77,12 +74,18 @@ impl Term{
       Term::Empty => {
         format!("{}ε", prefix)
       },
-      Term::Register(i) => {
-        format!("{}Register<{}>", prefix, i)
-      },
+      // Term::Register(i) => {
+      //   format!("{}Register<{}>", prefix, i)
+      // },
       Term::Variable(c) => {
         format!("{}Variable<{}>", prefix, c)
       },
+      Term::Program(inner) => {
+        format!("{}Program<{}>", prefix, inner)
+      }
+      Term::Query(inner) => {
+        format!("{}Query<{}>", prefix, inner)
+      }
     }
   }
 }
@@ -136,20 +139,20 @@ mod tests {
   use super::*;
   use crate::functor::ArityType;
 
-  pub fn make_struct(name: char, v: &TermVec) -> RcTerm {
+  pub fn make_struct(name: &str, v: &TermVec) -> RcTerm {
     let new_vec = v.clone();
 
     let arity = new_vec.len() as ArityType;
 
     Rc::new(Term::Structure {
-      functor: Functor { name, arity },
+      functor: Functor{ name: DefaultAtom::from(name), arity},
       args: new_vec
     })
   }
 
   pub fn new_struct_of_term(name: char, term: &RcTerm) -> RcTerm {
     Rc::new(Term::Structure {
-      functor: Functor { name, arity: 1 },
+      functor: Functor{ name: DefaultAtom::from(name), arity},
       args: term.to_term_vec()
     })
   }

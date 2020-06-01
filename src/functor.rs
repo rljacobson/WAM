@@ -1,12 +1,16 @@
+//! A special functor struct is necessary, because we need to know the arity of the functor after
+//! we no longer have access to its vector of arguments. Thus, a `Functor` is a name and an arity.
+
 use std::fmt::{Formatter, Display};
+use string_cache::DefaultAtom;
 
-pub type ArityType = u16;
+pub type ArityType = u32;
 
-#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+#[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Functor {
   /// A lowercase letter
-  pub name: char,
-  pub arity: ArityType,
+  pub name  : DefaultAtom,
+  pub arity : ArityType,
 }
 
 impl Display for Functor{

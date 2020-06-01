@@ -14,13 +14,13 @@ use std::rc::Rc;
 
 use crate::address::Address;
 use crate::cell::{Cell, CellVec, extract_addresses, RcCell};
-use crate::functor::Functor;
 use crate::parser::parse;
 use crate::term::*;
+use crate::functor::Functor;
 
 const MAXIMUM_ORDER_ATTEMPTS: usize = 200;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub enum Token{
   Register(Address),
   Assignment(Functor, Address)
@@ -82,14 +82,14 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   for (term, reg_ptr) in seen.iter(){
     match &**term{
 
-      Term::Structure {functor, args} => {
+      Term::Structure{functor, args} => {
         // Trying to be a bit too clever, probably.
         let mut new_args = Box::new(
           args.iter()
               .map(|t| Rc::new(Cell::REF(*seen.get(t).unwrap())))
               .collect::<Vec<RcCell>>()
         );
-        new_args.insert(0, Rc::new(Cell::Functor(*functor)));
+        new_args.insert(0, Rc::new(Cell::Functor(functor.clone())));
         registers[reg_ptr.idx()] = Rc::new(Cell::Structure(new_args.into()));
       },
 
@@ -276,7 +276,7 @@ impl Iterator for Tokenizer{
 
                   Cell::Functor(functor) => {
                     self.inner_index += 1;
-                    Some(Token::Assignment(*functor, self.order[self.outer_index]))
+                    Some(Token::Assignment(functor.clone(), self.order[self.outer_index]))
                   }
 
                   Cell::REF(address) => {
@@ -303,7 +303,7 @@ impl Iterator for Tokenizer{
           Cell::Functor(functor) => {
             // There should be only structures pointed to by addresses in `order`, but we allow
             // it in case it's useful elsewhere.
-            Some(Token::Assignment(*functor, Address::from_reg_idx(self.outer_index)))
+            Some(Token::Assignment(functor.clone(), Address::from_reg_idx(self.outer_index)))
           }
 
           _t => {

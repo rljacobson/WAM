@@ -4,8 +4,8 @@ use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
-use crate::address::Address;
 use crate::functor::Functor;
+use crate::address::Address;
 use crate::term::RcTerm;
 
 pub type RcCell = Rc<Cell>;

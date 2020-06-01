@@ -25,12 +25,12 @@ variant. Constants are represented as a structure with a zero-length argument li
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use crate::address::Address;
-use crate::chariter::CharIter;
-use crate::functor::{ArityType, Functor};
-use crate::term::{RcTerm, Term, TermVec};
+use string_cache::DefaultAtom;
 
-static WARN_ON_X_VAR: bool = false;
+use crate::chariter::CharIter;
+use crate::term::{RcTerm, Term, TermVec};
+use crate::functor::{Functor, ArityType};
+
 
 /// Parses text to produce an abstract syntax tree made of `Term`s.
 pub fn parse<'b>(input: &'b str) -> RcTerm{
@@ -80,47 +80,89 @@ fn parse_aux(text_ref: &Box<RefCell<CharIter>>) -> RcTerm {
     }
   }
 
+  // A giant string of if-else's.
+
   if next_char.is_lowercase(){
+    // Functor //
+    // Get the rest of the functor's name
+    let name =
+      match  text.get_prefix_match(char::is_alphanumeric){
+
+        Some(rest) => DefaultAtom::from(
+          format!("{}{}", next_char, rest)
+        ),
+
+        None => DefaultAtom::from(next_char.to_string())
+
+    };
+
     // `parse_arg_list` needs mutable access to the `CharIter`.
     drop(text);
     let args = parse_arg_list(text_ref);
-    // let args_ref = RefCell::borrow(&*args);
+
     Rc::new(
       Term::Structure {
-      functor: Functor{name: next_char, arity: args.len() as ArityType},
+      functor: Functor{name, arity: args.len() as ArityType},
       args: args.clone()
     })
   }
+
   else if next_char == ',' || next_char == ')' {
     // The assumption here is that `parse_aux` was called recursively, and the current term has
     // been completely parsed.
     Rc::new(Term::Empty)
   }
-  else if next_char == 'X'{
+
+  else if next_char.is_uppercase(){
     // Either a register or a variable
-    if let Some(number) = text.get_prefix_match(char::is_numeric) {
+
+    /*
+    if next_char == 'X'{
+      if let Some(number) = text.get_prefix_match(char::is_numeric) {
         // A register.
-      Rc::new(Term::Register(
+        return Rc::new(Term::Register(
           Address::RegPtr(
             number.parse::<usize>().unwrap().into()
           )
-        ))
-    } else {
-      // A variable, not a register. Warn about potentially confusing use of `X`.
-      if WARN_ON_X_VAR {
-        eprintln!("Warning: `X` used as a variable, which should be avoided.");
+        ));
       }
-      Rc::new(Term::Variable(next_char))
-    }
-  } // end if register or a variable
-  else if next_char.is_uppercase(){
-    // Variable
-    Rc::new(Term::Variable(next_char))
+    } // end if register
+    */
+
+    // A variable, not a register. Get the rest of the name.
+    let name =
+      match  text.get_prefix_match(char::is_alphanumeric){
+
+        Some(rest)  => DefaultAtom::from(
+          format!("{}{}", next_char, rest)
+        ),
+
+        None => DefaultAtom::from(next_char.to_string())
+
+      };
+    Rc::new(Term::Variable(name))
   }
+
+  else if next_char == '?' {
+    // Note: There is no equivalent case for `Term::Program`. The caller should be handling this.
+    match text.peek() {
+      Some('-') => {
+        text.next(); // Eat '-'
+        // `parse_aux` needs a mutable borrow of text, so drop this one.
+        drop(text);
+        let term = parse_aux(text_ref);
+        Rc::new(Term::Query(term))
+      }
+      _ => {
+        eprintln!("Error: Unexpected character `{}`", next_char);
+        panic!();
+      }
+    }
+  }
+
   else {
     eprintln!("Error: Unexpected character `{}`", next_char);
     panic!();
-    // Term::Epsilon
   }
 }
 
@@ -150,6 +192,7 @@ fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
       eprintln!("Reached EOL while looking for `)`.");
       panic!();
     }
+
     if *term != Term::Empty {
       args.push(term.into());
     } else {
@@ -158,18 +201,22 @@ fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
 
     text.trim_left();
     match text.peek(){
+
       Some(',') => {
         // Eat the `,` character.
         text.next();
       },
+
       Some(')') => {
         // Eat the `)` character and return.
         text.next();
         break;
       },
+
       _ => {
-        // Don't advance (pass).
+        // Don't advance.
       }
+
     } // end match peek
   } // end while
   return args.into();

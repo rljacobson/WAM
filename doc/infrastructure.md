@@ -70,7 +70,7 @@ impl Term{
     match self {
       Term::Structure{ functor, args } => {
         let mut buffer =
-          if functor.arity == 0 {
+          if args.is_empty() {
             format!("{}Constant<{}>", prefix, functor.name)
           } else{
             format!("{}Functor<{}(…)>\n", prefix, functor)
@@ -194,7 +194,7 @@ fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
     
     text.trim_left();
     match text.peek(){
-      Some(',') => { text.next(); },  		// Eat the `,` character.
+      Some(',') => { text.next(); },       // Eat the `,` character.
       Some(')') => { text.next(); break; } // Eat the `)` character and return.
     },
     _ => { /* Don't advance (pass). */ }
@@ -289,22 +289,22 @@ impl Iterator for TermIter{
 
 ### An aside on intermediate representations
 
-We need to decide what kind of a “thing” we use to use to represent the flattened term. A representation of a piece of code that is neither the source code nor the final executable form is called an *intermediate representation* or *IR*. We have a few choices of IRs:
+We need to decide what kind of a “thing” we use to represent the flattened term. A representation of a piece of code that is neither the source code nor the final executable form is called an *intermediate representation* or *IR*. We have a few choices of IRs:
 
 1. Keep using the `Term` enum. 
 2. Use the `Token` enum that the bitcode[^bitcode] compiler will consume, if it’s different from `Term`. 
 3. Use whatever representation is used for in-memory data, if it’s different from either of the other two above. For us it will be: the `Cell` enum.
 4. Invent some new enum type.
 
-The only unreasonable option is #4, as it only provides the disadvantage of another intermediate representation type. One might choose option #2 in the hope that it will save us some work translating to yet another intermediate representation type later on, but alas, it will turn out that we will need to walk the forest of `X`$i$‘s anyway, so if we use a representation we are going to use anyway, there’s no extra work. Option #1 has the advantage that `Term`s print out to the console in a nice tree format. But a *flattened* tree no longer looks much like a tree anymore, so this advantage is limited.
+The only unreasonable option is #4, as it only provides the disadvantage of another intermediate representation type. One might choose option #2 in the hope that it will save us some work translating to yet another intermediate representation type later on, but alas, it will turn out that we will need to walk the forest of `X`$i$‘s anyway, so if we use a representation we are going to use anyway, there’s no extra work. Option #1 has the advantage that `Term`s print out to the console in a nice tree format. But a *flattened* tree no longer looks much like a tree anymore, so this advantage is of limited use.
 
-I chose option #3, because it has the advantage that we can put it directly into the VM’s memory if we desire, as part of testing, for example.
+I chose option #3, because it has the advantage that we can put it directly into the VM’s memory if we desire, as part of testing, for example. There is a downside: We look a little silly transforming to a `Cell`, then a `Token`, and then back to a `Cell` again. I’m OK with that.
 
 ### The algorithm
 
 The code in this subsection refers to an `Address` type and a vector of `Address`es called `registers`. The `X`$i$’s we have been discussing in this section will be implemented as registers in the virtual machine. The `Cell` type used below is the type for the values that are stored either at an address in the vm’s heap memory or in a register. The `Address` type can represent both heap addresses and register names. We will talk about those types more when we start working on coding the vm itself. For now, addresses are just indexes into an array of registers.
 
-The first step is to assign each distinct term its own register. Which terms have already been assigned which registers is tracked with a `HashMap<RcTerm, Address>`. (Recall that `type RcTerm = Rc<Term>`.) We again iterate over each term, assigning to each new term encountered the next available register. 
+The first step is to assign each distinct term its own register. Which terms have already been assigned which registers is tracked with a `HashMap<RcTerm, Address>` named `seen`. (Recall that `type RcTerm = Rc<Term>`.) We again iterate over each term, assigning to each new term encountered the next available register. 
 
 ```rust
 // token.rs
@@ -386,7 +386,7 @@ The remaining code in `flatten_term()` calls the `order_registers()` function an
 
 The components (cells) of the flattened term need to be ordered so that registers are always assigned to before they are used, that is, before they appear on the right hand side of an assignment. In this way our programming language is like many other great languages that require a variable must be declared before it is used. The difference is, the `order_registers()` function satisfies this requirement on behalf of the source code author. I encourage you to write your own version of this algorithm before looking at mine, as it is an enjoyable algorithm to come up with.
 
-For the sake of efficiency the algorithm copies around addresses rather than cells. We maintain two `HashSet<Address>`s, one for addresses we have already seen, cleverly named `seen`, and another for the rest of the addresses, creatively called `unseen`. We also have a `Vec<Address>` called `ordered` to store the result. First, observe that we can automatically put every variable cell into `seen`, because they define and only use themselves. The `unseen` `HashSet` is initialized with everything else.
+For the sake of efficiency the algorithm copies around addresses rather than cells.[^efficiency] We maintain two `HashSet<Address>`s, one for addresses we have already seen, cleverly named `seen`, and another for the rest of the addresses, creatively called `unseen`. We also have a `Vec<Address>` called `ordered` to store the result. First, observe that we can automatically put every variable cell into `seen`, because they define and only use themselves. The `unseen` `HashSet` is initialized with everything else.
 
 ```rust
 pub fn order_registers(flat_terms: CellVec) -> Box<Vec<Address>>{
@@ -409,9 +409,9 @@ pub fn order_registers(flat_terms: CellVec) -> Box<Vec<Address>>{
 	⋮
 ```
 
-Now comes the meat of the algorithm. Having seen a cell means either the cell is a variable or the cell has been assigned to.  A cell in `unseen` can be put next in order if all of the addresses that appear on the right hand side of the equal sign have already been seen, because that means we have already visited the cells at those addresses and, for functor structures, already assigned to them. Thus, for each cell in `unseen`, we make a `HashSet` of all of the cells that appear on the right hand side for the cell, and if the `HashSet` is a subset of `seen`, then everything on the right hand side of the equal sign has been seen by definition, and so we stage the cell for being inserted next into the `order` vector.
+Now comes the meat of the algorithm. Having seen a cell means either the cell is a variable or the cell has been assigned to.  A cell in `unseen` can be put next in order if all of the addresses that appear on the right hand side of the equal sign have already been seen, because that means we have already visited the cells at those addresses and, for functor structures, already assigned to them. Thus, for each cell in `unseen`, we make a `HashSet` of all of the cells that appear on the right hand side for the cell, and if the `HashSet` is a subset of `seen`, then everything on the right hand side of the equal sign has been seen by definition, and so we stage that cell to be inserted next into the `order` vector.
 
-Doing the above only one time is not sufficient to order every cell. We must repeat the process until `unseen` is empty. As a precaution against malicious actors who might construct pathological input, the process is limited to some reasonably large maximum number of attempts to empty out `unseen`. The final result is a vector of all distinct register addresses ordered so that the corresponding cells satisfy the desired property.
+Doing the above only one time is not sufficient to order every cell. We must repeat the process until `unseen` is empty. As a precaution against malicious actors who might construct pathological input, the process is limited to some reasonably large maximum number of attempts to empty out `unseen`.[^loops] The final result is a vector of all distinct register addresses ordered so that the corresponding cells satisfy the desired property.
 
 ```rust
 	⋮
@@ -443,9 +443,11 @@ for _loop_count in 0..MAXIMUM_ORDER_ATTEMPTS {
 
 The term is now ready to be transformed into a stream of tokens to be consumed by the compiler.
 
+[efficiency]: Never believe any of performance claims about a micro-optimization like this. The truth is, the difference between using the `Cell` and using the `Cell`’s address is zero. The claims to efficiency are just a story the author tells themselves to justify indulging their obsessive behavior. See Emory Berger, "Performance Matters," *The Strange Loop*, September 2019. Online: https://youtu.be/r-TLSBdHe1A.
+
 [bitcode]: Actually, we won’t quite have a bitcode yet. Instead, the VM will interpret the instructions as they are formed from the input token stream.
 
 [wiki_functor]: [Function Word](https://en.wikipedia.org/wiki/Function_word), Wikipedia.
 
-
+[loops]: What determines the number of loops required to completely order a flattened term? Can you come up with a simple formula?
 

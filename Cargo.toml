@@ -6,10 +6,19 @@ authors = ["Robert Jacobson <rljacobson@gmail.com>"]
 edition = "2018"
 
 [features]
+#  Enabling `trace_computation` will print the VM state at every instruction.
 default = ["trace_computation"]
 trace_computation = []
 
 [dependencies]
+# For displaying data as a formatted table:
 prettytable-rs = "^0.8"
+# For static prettytable style:
 lazy_static = "^1.4.0"
-
+# For opcode <-> text:
+strum = "^0.18.0"
+strum_macros = "^0.18.0"
+# String interning:
+string_cache = "^0.8.0"
+# Number to enum variant:
+num_enum = "^0.5.0"
