@@ -109,16 +109,6 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   let rc_registers: CellVec = registers.into();
   let order = order_registers(rc_registers.clone());
 
-  #[cfg(feature = "trace_computation")]
-  {
-    print!("Visit order: ");
-    let list = order.iter()
-                    .map(|c| { format!("{}", rc_registers[c.idx()])})
-                    .collect::<Vec<String>>()
-                    .join(", ");
-    println!("{}", list);
-  }
-
   // order
   (rc_registers.clone(), order)
 
@@ -209,6 +199,7 @@ pub fn order_registers(flat_terms: CellVec) -> Box<Vec<Address>>{
   Note that a `Tokenizer` cannot process `Term::Program` and `Term::Query` terms. Those should be
    stripped before creating a Tokenizer.
 */
+#[derive(Clone)]
 pub struct Tokenizer{
   outer_index: usize,
   inner_index: usize,
@@ -230,7 +221,7 @@ impl Tokenizer{
   }
   /// Convenience function that forwards to `Tokenizer::new()`.
   pub fn new_query(text: &str) -> Self{
-    Self::new(text, true)
+    Self::new(text, false)
   }
 
   /**
@@ -248,6 +239,16 @@ impl Tokenizer{
     if is_program {
       order.reverse();
     }
+
+    #[cfg(feature = "trace_computation")]
+      {
+        print!("Visit order: ");
+        let list = order.iter()
+                        .map(|c| { format!("{}", cell_vec[c.idx()])})
+                        .collect::<Vec<String>>()
+                        .join(", ");
+        println!("{}", list);
+      }
 
     Tokenizer{
       // The next available index

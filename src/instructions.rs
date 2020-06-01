@@ -30,10 +30,16 @@
 use strum_macros::{Display as StrumDisplay, IntoStaticStr};
 use num_enum::{TryFromPrimitive, IntoPrimitive};
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 
 // If you change this you must also change `encode_instruction` and `decode_instruction`.
-type Word = u32;
-type DoubleWord = u64;
+pub type Word = u32;
+pub type DoubleWord = u64;
+// Convenience for decomposing a DoubleWord into a high word and a low word:
+pub struct TwoWords {
+  pub low: Word,
+  pub high: Word
+}
 
 /**
   Opcodes of the virtual machine.
@@ -78,21 +84,43 @@ pub enum Opcode {
   Deallocate,
 }
 
-/// A descriptor indicating how the instruction is encoded.
+/// Holds the unencoded components of an instruction
+#[derive(Copy, Clone, Debug)]
 pub enum InstructionArguments {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]
-  Binary {opcode: Opcode, add1: Word, add2: Word},
+  Binary {opcode: Opcode, address1: Word, address2: Word},
   /// [OpCode:8][Address:24]
   Unary {opcode: Opcode, address: Word},
   /// [OpCode:8][Reserved:24]
   Nullary(Opcode),
 }
 
+impl Display for InstructionArguments{
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self{
+
+      InstructionArguments::Binary{opcode, address1: add1, address2: add2 } => {
+        write!(f, "{}({}, {})", opcode, add1, add2)
+      }
+
+      InstructionArguments::Unary { opcode, address} => {
+        write!(f, "{}({})", opcode, address)
+      }
+
+      InstructionArguments::Nullary(opcode) => {
+        write!(f, "{}", opcode)
+      }
+
+    }
+  }
+}
+
+
 /// An `Either` type for an encoded instruction, allowing the instruction to be
 /// either one word or two.
 pub enum EncodedInstruction{
   Word(Word),
-  DoubleWorld(DoubleWord)
+  DoubleWord(DoubleWord)
 }
 
 pub fn decode_instruction(instruction: DoubleWord) -> InstructionArguments {
@@ -100,6 +128,7 @@ pub fn decode_instruction(instruction: DoubleWord) -> InstructionArguments {
     match Opcode::try_from((instruction & 0xFF) as u8){
       Ok(v)  => v,
       Err(e) => {
+        // ToDo: Alternatively, return an `Option<InstructionArguments>`.
         panic!("{}", e);
       }
     };
@@ -108,8 +137,8 @@ pub fn decode_instruction(instruction: DoubleWord) -> InstructionArguments {
     // [OpCode:8][Address:24][Address:24][Reserved:8]
     InstructionArguments::Binary {
       opcode,
-      add1: ((instruction >> 8) & 0xFFFFFF) as Word,
-      add2: (instruction >> 32) as Word,
+      address1: ((instruction >> 8) & 0xFFFFFF) as Word,
+      address2: (instruction >> 32) as Word,
     }
 
   } else if Into::<u8>::into(opcode) < 12 {
@@ -132,7 +161,7 @@ pub fn decode_instruction(instruction: DoubleWord) -> InstructionArguments {
 pub fn encode_instruction(instruction: InstructionArguments) -> EncodedInstruction{
     match instruction{
 
-      InstructionArguments::Binary {opcode, add1, add2} => {
+      InstructionArguments::Binary {opcode, address1: add1, address2: add2 } => {
         EncodedInstruction::DoubleWord(
           ( opcode as DoubleWord)        +
           ((add1   as DoubleWord) << 8 ) +
@@ -143,7 +172,7 @@ pub fn encode_instruction(instruction: InstructionArguments) -> EncodedInstructi
       InstructionArguments::Unary {opcode, address} => {
         EncodedInstruction::Word(
           ( opcode as Word)        +
-          ((add1   as Word) << 8 )
+          ((address   as Word) << 8 )
         )
       },
 

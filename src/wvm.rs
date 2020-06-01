@@ -6,17 +6,15 @@
 use std::collections::{HashSet, HashMap};
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
+use std::usize::MAX;
 
 use prettytable::{format as TableFormat, Table};
-use string_cache::{DefaultAtom};
 
-
-use crate::address::Address;
-use crate::cell::{Cell, CellVec};
+use crate::address::*;
+use crate::cell::*;
 use crate::token::*;
-use std::usize::MAX;
-use crate::functor::Functor;
-
+use crate::functor::*;
+use crate::instructions::*;
 
 #[allow(non_snake_case)]
 pub struct WVM {
@@ -24,11 +22,6 @@ pub struct WVM {
   // Flags
   fail: bool, // Indication of unification failure
   mode: Mode, // Read or Write mode
-
-  // What the compiler should produce
-  emit_bytecode: bool,
-  emit_bytecode_text: bool,
-  interpret: bool,
 
   // Memory Stores
   heap: Vec<Cell>, // The "global stack," a memory store
@@ -39,10 +32,16 @@ pub struct WVM {
   rp        : usize,          // Register Pointer, a cursor
   registers : Box<Vec<Cell>>, // Term registers
 
-  symbols   : HashMap<DefaultAtom, u32>,
+  /* M2 code
+  // Symbol table mapping to functors from their address in code memory.
+  // This is obviously only meaningful if bytecode is being emitted,
+  // as otherwise every functor as the same address of zero.
+  symbols     : HashMap<u32, Functor>,
+  */
+  code_buffer : String, // String buffer for emitted code text
 
   // For tracing computations :
-  #[cfg(feature = "trace_computation")] token_stack   :  CellVec,
+  #[cfg(feature = "trace_computation")] token_stack   :  Rc<Vec<Token>>,
   #[cfg(feature = "trace_computation")] current_token :  usize
 
 }
@@ -91,14 +90,18 @@ impl WVM {
   
   pub fn new() -> WVM {
     WVM {
-      fail      :  false,
-      mode      :  Mode::Write,
-      heap      :  vec![],
-      code      :  vec![],
-      hp        :  0,
-      rp        :  0,
-      registers :  Box::new(vec![]),
-      symbols   :  HashMap::new(),
+      fail        :  false,
+      mode        :  Mode::Read, // Arbitrary value
+      heap        :  vec![],
+      code        :  vec![],
+      hp          :  0,
+      rp          :  0,
+      registers   :  Box::new(vec![]),
+      /* M2 code
+      symbols     :  HashMap::new(),
+      */
+      code_buffer :  String::new(),
+
       // Computation tracing:
       #[cfg(feature = "trace_computation")] token_stack   : Rc::new(vec![]),
       #[cfg(feature = "trace_computation")] current_token : MAX,
@@ -130,8 +133,12 @@ impl WVM {
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
-      Address::CellPtr(_)  => self.heap[ptr.idx()].clone(),
-      Address::RegPtr(_)   => self.registers[ptr.idx()].clone()
+      Address::HeapPtr(_) => self.heap     [ptr.idx()].clone(),
+      Address::RegPtr (_) => self.registers[ptr.idx()].clone(),
+      Address::CodePtr(_) => {
+        eprintln!("Tried to use `value_at()` with a code address: {}", ptr);
+        panic!();
+      }
     }
   }
 
@@ -151,11 +158,15 @@ impl WVM {
         self.registers[address.idx()] = cell.clone();
       },
 
-      Address::CellPtr(_) => {
+      Address::HeapPtr(_) => {
         if address.idx() >= self.heap.len() {
           self.heap.resize(address.idx() + 1, Cell::Empty);
         }
         self.heap[address.idx()] = cell.clone();
+      },
+
+      Address::CodePtr(_) => {
+        eprintln!("Error: Tried to use `set_value_at()` with a code address. Ignoring.");
       }
 
     }
@@ -192,20 +203,29 @@ impl WVM {
         build in-memory representations directly "by hand."
 
   */
-  pub fn compile(&mut self, text: &str){
+  pub fn compile(&mut self, text: &str, to_bytecode: bool, to_bytecode_text: bool, interpret: bool){
     match text.starts_with("?-") {
 
       true  => {
         let tokenizer = Tokenizer::new_query(&text[2..]);
-        self.compile_tokens(tokenizer, false);
+        self.compile_tokens(tokenizer, false, to_bytecode: bool, to_bytecode_text: bool, interpret: bool);
       }
 
       false => {
         let tokenizer = Tokenizer::new_program(text);
-        self.compile_tokens(tokenizer, true);
+        self.compile_tokens(tokenizer, true, to_bytecode, to_bytecode_text, interpret);
       }
 
     }
+    #[cfg(feature = "trace_computation")]
+      {
+        if to_bytecode {
+          println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
+        }
+        if to_bytecode_text {
+          println!("# Compiled Code Instructions\n{}", self.code_buffer);
+        }
+      }
   }
 
   /**
@@ -213,45 +233,109 @@ impl WVM {
 
     This function assumes that the term has been prepared with `flatten_term`.
   */
-  fn compile_tokens(&mut self, tokenizer: Tokenizer, is_program: bool){
+  fn compile_tokens(
+    &mut self, tokenizer: Tokenizer,
+    is_program: bool,
+    to_bytecode: bool,
+    to_bytecode_text: bool,
+    interpret: bool
+  ){
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
 
     #[cfg(feature = "trace_computation")]
       {
+        let stream_copy = tokenizer.clone();
+        self.token_stack = Rc::new(stream_copy.collect());
+        /*
         self.token_stack = Rc::new(
           tokenizer.order
                    .iter()
                    .map( |a| {tokenizer.cell_vec[a.idx()].clone()})
                    .collect()
         );
+        */
+        self.current_token = 1;
         println!("{}", self);
         self.current_token = 0;
       }
 
     // We iterate over the tokens in the registers in `order`.
     for token in tokenizer {
+
+      #[cfg(feature = "trace_computation")] { self.current_token += 1; }
+
       match token {
 
         Token::Assignment(functor, address) => {
-
           seen.insert(address);
+          /* M2 Code
+          // The next address is the instruction we are about to push onto `self.code`, which
+          // will be the first instruction of `functor`.
+          let functor_address = self.code.len() as u32;
+          self.symbols.insert(functor_address, functor);
+          */
           match is_program {
 
             true  => {  // Program
-              self.get_structure(&functor, &address);
+              if to_bytecode || to_bytecode_text{
+                // Try to get the functor's address
+                let mut functor_address: usize = 0;
+                let instruction =
+                  InstructionArguments::Binary {
+                    opcode: Opcode::GetStructure,
+                    address1: functor_address as u32, // Pointer to heap
+                    address2: address.enc()
+                  };
+                self.emit_bytecode(encode_instruction(instruction));
+                if to_bytecode_text {
+                  self.code_buffer.push_str(
+                    format!(
+                      "{}({}, {})\n",
+                      Opcode::GetStructure,
+                      functor,
+                      address
+                    ).as_str()
+                  );
+                }
+              }
+              if interpret{
+                self.get_structure(&functor, &address);
+              }
             }
 
             false => { // Query
-              self.put_structure(&functor, &address);
+              if to_bytecode || to_bytecode_text{
+                // Try to get the functor's address
+                let mut functor_address: usize = 0;
+                let instruction =
+                  InstructionArguments::Binary {
+                    opcode: Opcode::PutStructure,
+                    address1: functor_address as u32, // Pointer to heap
+                    address2: address.enc()
+                  };
+                self.emit_bytecode(encode_instruction(instruction));
+                if to_bytecode_text {
+                      self.code_buffer.push_str(
+                        format!(
+                          "{}({}, {})\n",
+                          Opcode::PutStructure,
+                          functor,
+                          address
+                        ).as_str()
+                      );
+                    }
+              }
+              if interpret{
+                self.put_structure(&functor, &address);
+              }
             }
 
-          }
+          } // end match is_program
 
-          #[cfg(feature = "trace_computation")] { self.current_token += 1; }
-          self.rp = address.idx();
+          self.rp = address.idx() as usize;
 
-        }
+        } // end is assignment
 
         Token::Register(address) => {
           match seen.contains(&address) {
@@ -261,11 +345,41 @@ impl WVM {
               match is_program {
 
                 true  => {  // Program
-                  self.unify_value(&address);
+                  if to_bytecode || to_bytecode_text{
+                    let instruction =
+                      InstructionArguments::Unary {
+                        opcode: Opcode::UnifyValue,
+                        address: address.enc()
+                      };
+                    self.emit_bytecode(encode_instruction(instruction));
+                    if to_bytecode_text {
+                      self.code_buffer.push_str(
+                        format!("{}({})\n", Opcode::UnifyValue, address).as_str()
+                      );
+                    }
+                  }
+                  if interpret{
+                    self.unify_value(&address);
+                  }
                 }
 
                 false => { // Query
-                  self.set_value(&address);
+                  if to_bytecode || to_bytecode_text{
+                    let instruction =
+                      InstructionArguments::Unary {
+                        opcode: Opcode::SetValue,
+                        address: address.enc()
+                      };
+                    self.emit_bytecode(encode_instruction(instruction));
+                    if to_bytecode_text {
+                      self.code_buffer.push_str(
+                        format!("{}({})\n", Opcode::SetValue, address).as_str()
+                      );
+                    }
+                  }
+                  if interpret{
+                    self.set_value(&address);
+                  }
                 }
 
               }
@@ -277,11 +391,41 @@ impl WVM {
               match is_program {
 
                 true  => {  // Program
-                  self.unify_variable(&address);
+                  if to_bytecode || to_bytecode_text{
+                    let instruction =
+                      InstructionArguments::Unary {
+                        opcode: Opcode::UnifyVariable,
+                        address: address.enc()
+                      };
+                    self.emit_bytecode(encode_instruction(instruction));
+                    if to_bytecode_text {
+                      self.code_buffer.push_str(
+                        format!("{}({})\n", Opcode::UnifyVariable, address).as_str()
+                      );
+                    }
+                  }
+                  if interpret{
+                    self.unify_variable(&address);
+                  }
                 }
 
                 false => { // Query
-                  self.set_variable(&address);
+                  if to_bytecode || to_bytecode_text{
+                    let instruction =
+                      InstructionArguments::Unary {
+                        opcode: Opcode::SetVariable,
+                        address: address.enc()
+                      };
+                    self.emit_bytecode(encode_instruction(instruction));
+                    if to_bytecode_text {
+                      self.code_buffer.push_str(
+                        format!("{}({})\n", Opcode::SetVariable, address).as_str()
+                      );
+                    }
+                  }
+                  if interpret{
+                    self.set_variable(&address);
+                  }
                 }
 
               }
@@ -298,6 +442,24 @@ impl WVM {
         break;
       };
     } // end iterate over tokens
+  }
+
+  fn emit_bytecode(&mut self, instruction: EncodedInstruction){
+    match instruction {
+
+      EncodedInstruction::Word(word) => {
+        self.code.push(word)
+      },
+
+      EncodedInstruction::DoubleWord(double_word) => {
+        let words: TwoWords;
+        unsafe {
+          words = std::mem::transmute(double_word);
+        }
+        self.code.push(words.low);
+        self.code.push(words.high);
+      }
+    }
   }
 
   // endregion  Compilation/Interpretation
@@ -412,6 +574,7 @@ impl WVM {
     Either matches a functor, binds a variable to a new functor value, or fails.
 
     Note: `reg_ptr` must be a pointer to a register, but this contract is not statically checked.
+          Similarly, `functor_address` must be a code address.
   */
   fn get_structure(&mut self, functor: &Functor, reg_ptr: &Address){
     reg_ptr.require_register();
@@ -436,13 +599,13 @@ impl WVM {
         self.bind(&address, &funct_add);
       },
 
-      Cell::STR(cell_ptr @ Address::CellPtr(_)) => {
+      Cell::STR(heap_ptr @ Address::HeapPtr(_)) => {
         // A pointer to a functor.
-        if self.heap[cell_ptr.idx()] == Cell::Functor(functor.clone()) {
+        if self.heap[heap_ptr.idx()] == Cell::Functor(functor.clone()) {
           #[cfg(feature = "trace_computation")]
             println!("get_structure({}, {}): functor already on stack", functor, reg_ptr);
 
-          self.hp   = cell_ptr.idx() + 1;
+          self.hp   = (heap_ptr.idx() + 1) as usize;
           self.mode = Mode::Read;
 
         } else{
@@ -451,7 +614,7 @@ impl WVM {
             println!("get_structure({}, {}) - STR points to nonexistent functor", functor, reg_ptr);
           self.fail = true;
         }
-      },
+      }
 
       _ => {
         // This is an error condition that should not happen in correct programs.

@@ -28,7 +28,7 @@ fn main() {
   // println!("Parse Tree:\n{}\n", ast);
 
   let mut machine = WVM::new();
-  machine.compile(text);
+  machine.compile(text, true, true, true);
 
   // println!("Internal Machine State:\n{}", machine);
 
@@ -37,7 +37,7 @@ fn main() {
   println!("Program Expression: {}", text);
   // println!("Parse Tree:\n{}\n", ast);
 
-  machine.compile(text);
+  machine.compile(text, true, true, true);
 
   // println!("Internal Machine State:\n{}", machine);
 
