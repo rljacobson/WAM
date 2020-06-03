@@ -81,7 +81,7 @@ pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind
   // Primitive error handling
   let line_number: RefCell<u32> = RefCell::new(0);
 
-  let comment = pair(one_char('#'), is_not("\n\r"));
+  let comment = pair(one_char('%'), is_not("\n\r"));
   let rest_of_line = terminated(space0, opt(&comment));
   let binary_inst_p = {
     tuple::<&str, _, (_, ErrorKind), _>((
