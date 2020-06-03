@@ -24,3 +24,5 @@ string_cache = "^0.8.0"
 num_enum = "^0.5.0"
 # Assembly, bytecode, and source code parsing:
 nom = "5"
+# Symbol table:
+bimap = "0.4"

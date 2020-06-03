@@ -5,10 +5,10 @@
 
 use std::collections::{HashSet, HashMap};
 use std::fmt::{Display, Formatter};
-use std::rc::Rc;
 use std::usize::MAX;
 
 use prettytable::{format as TableFormat, Table};
+use bimap::BiMap;
 
 use crate::address::*;
 use crate::cell::*;
@@ -31,18 +31,18 @@ pub struct WVM {
   // Registers //
   hp        : usize,          // Heap Pointer, a cursor
   rp        : usize,          // Register Pointer, a cursor
-  registers : Box<Vec<Cell>>, // Term registers
+  ip        : usize,          // Instruction Pointer
+  registers : Vec<Cell>, // Term registers
 
-  /* M2 code
-  // Symbol table mapping to functors from their address in code memory.
-  // This is obviously only meaningful if bytecode is being emitted,
-  // as otherwise every functor as the same address of zero.
-  symbols     : HashMap<u32, Functor>,
-  */
+  // Symbol table mapping line labels to their address in code memory.
+  labels    : HashMap<Functor, Address>,
+  // Symbol table mapping functor symbols `f/n` to a "virtual" address.
+  symbols   : BiMap<Functor, Address>,
+
   code_buffer : String, // String buffer for emitted code text
 
   // For tracing computations :
-  #[cfg(feature = "trace_computation")] token_stack   :  Rc<Vec<Token>>,
+  #[cfg(feature = "trace_computation")] token_stack   :  Vec<Token>,
   #[cfg(feature = "trace_computation")] current_token :  usize
 
 }
@@ -53,7 +53,7 @@ impl WVM {
 
   fn make_register_table<T> (
       name      : char,
-      registers : &Vec<T>,
+      registers : &[T],
       highlight : usize,
       start     : usize
     ) -> Table
@@ -93,19 +93,34 @@ impl WVM {
     WVM {
       fail        :  false,
       mode        :  Mode::Read, // Arbitrary value
+
       heap        :  vec![],
       code        :  vec![],
+      registers   :  vec![],
+
       hp          :  0,
       rp          :  0,
-      registers   :  Box::new(vec![]),
-      /* M2 code
-      symbols     :  HashMap::new(),
-      */
+      ip          :  0,
+
+      labels      :  HashMap::new(),
+      symbols     :  BiMap::new(),
       code_buffer :  String::new(),
 
       // Computation tracing:
-      #[cfg(feature = "trace_computation")] token_stack   : Rc::new(vec![]),
+      #[cfg(feature = "trace_computation")] token_stack   : vec![],
       #[cfg(feature = "trace_computation")] current_token : MAX,
+    }
+  }
+
+  /// Gives the virtual address of a `Functor`.
+  fn intern_functor(&mut self, functor: &Functor) -> Address{
+    match self.symbols.get_by_left(functor) {
+      Some(address) => *address,
+      None => {
+        let address = Address::Functor(self.symbols.len());
+        self.symbols.insert(functor.clone(), address);
+        address
+      }
     }
   }
 
@@ -134,9 +149,10 @@ impl WVM {
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
-      Address::HeapPtr(_) => self.heap     [ptr.idx()].clone(),
-      Address::RegPtr (_) => self.registers[ptr.idx()].clone(),
-      Address::CodePtr(_) => {
+      Address::Heap(_) => self.heap     [ptr.idx()].clone(),
+      Address::Register(_) => self.registers[ptr.idx()].clone(),
+      | Address::Functor(_)
+      | Address::Code(_) => {
         eprintln!("Tried to use `value_at()` with a code address: {}", ptr);
         panic!();
       }
@@ -152,21 +168,22 @@ impl WVM {
   fn set_value_at(&mut self, address: &Address, cell: &Cell){
     match address {
 
-      Address::RegPtr(_)  => {
+      Address::Register(_)  => {
         if address.idx() >= self.registers.len() {
           self.registers.resize(address.idx() + 1, Cell::Empty);
         }
         self.registers[address.idx()] = cell.clone();
       },
 
-      Address::HeapPtr(_) => {
+      Address::Heap(_) => {
         if address.idx() >= self.heap.len() {
           self.heap.resize(address.idx() + 1, Cell::Empty);
         }
         self.heap[address.idx()] = cell.clone();
       },
 
-      Address::CodePtr(_) => {
+      | Address::Functor(_)
+      | Address::Code(_) => {
         eprintln!("Error: Tried to use `set_value_at()` with a code address. Ignoring.");
       }
 
@@ -204,26 +221,24 @@ impl WVM {
         build in-memory representations directly "by hand."
 
   */
-  pub fn compile(&mut self, text: &str, to_bytecode: bool, to_bytecode_text: bool, interpret: bool){
+  pub fn compile(&mut self, text: &str, to_assembly: bool, interpret: bool){
     match text.starts_with("?-") {
 
       true  => {
         let tokenizer = Tokenizer::new_query(&text[2..]);
-        self.compile_tokens(tokenizer, false, to_bytecode: bool, to_bytecode_text: bool, interpret: bool);
+        self.compile_tokens(tokenizer, false,  to_assembly, interpret);
       }
 
       false => {
         let tokenizer = Tokenizer::new_program(text);
-        self.compile_tokens(tokenizer, true, to_bytecode, to_bytecode_text, interpret);
+        self.compile_tokens(tokenizer, true, to_assembly, interpret);
       }
 
     }
     #[cfg(feature = "trace_computation")]
       {
-        if to_bytecode {
-          println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
-        }
-        if to_bytecode_text {
+        println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
+        if to_assembly {
           println!("# Compiled Code Instructions\n{}", self.code_buffer);
         }
       }
@@ -237,8 +252,7 @@ impl WVM {
   fn compile_tokens(
     &mut self, tokenizer: Tokenizer,
     is_program: bool,
-    to_bytecode: bool,
-    to_bytecode_text: bool,
+    to_assembly: bool,
     interpret: bool
   ){
     // Contains the register arguments we've seen before.
@@ -247,15 +261,7 @@ impl WVM {
     #[cfg(feature = "trace_computation")]
       {
         let stream_copy = tokenizer.clone();
-        self.token_stack = Rc::new(stream_copy.collect());
-        /*
-        self.token_stack = Rc::new(
-          tokenizer.order
-                   .iter()
-                   .map( |a| {tokenizer.cell_vec[a.idx()].clone()})
-                   .collect()
-        );
-        */
+        self.token_stack = stream_copy.collect();
         self.current_token = 1;
         println!("{}", self);
         self.current_token = 0;
@@ -268,73 +274,69 @@ impl WVM {
 
       match token {
 
-        Token::Assignment(functor, address) => {
-          seen.insert(address);
-          /* M2 Code
-          // The next address is the instruction we are about to push onto `self.code`, which
-          // will be the first instruction of `functor`.
-          let functor_address = self.code.len() as u32;
-          self.symbols.insert(functor_address, functor);
-          */
+        Token::Assignment(functor, register_address) => {
+          seen.insert(register_address);
+
+          // The instruction we are about to push onto `self.code`
+          // will be the first instruction of `procedure`.
+          let procedure_address = self.code.len() as AddressType;
+          self.labels.insert(functor.clone(), Address::Code(procedure_address));
           match is_program {
 
             true  => {  // Program
-              if to_bytecode || to_bytecode_text{
-                // Try to get the functor's address
-                let mut functor_address: AddressType = 0;
-                let instruction =
-                  Instruction::Binary {
-                    opcode: Operation::GetStructure,
-                    address1: functor_address, // Pointer to heap
-                    address2: address.idx()
-                  };
-                self.emit_bytecode(encode_instruction(instruction));
-                if to_bytecode_text {
-                  self.code_buffer.push_str(
-                    format!(
-                      "{}({}, {})\n",
-                      Operation::GetStructure,
-                      functor,
-                      address
-                    ).as_str()
-                  );
-                }
+              let instruction =
+                Instruction::Binary {
+                  opcode: Operation::GetStructure,
+                  address1: self.intern_functor(&functor),
+                  address2: register_address  // Register address
+                };
+              self.emit_bytecode(encode_instruction(instruction));
+
+              if to_assembly {
+                self.code_buffer.push_str(
+                  // Functors are specially formatted
+                  format!(
+                    "{}({}, {})\n",
+                    Operation::GetStructure,
+                    functor,
+                    register_address
+                  ).as_str()
+                );
               }
               if interpret{
-                self.get_structure(&functor, &address);
+                self.get_structure(&functor, &register_address);
               }
             }
 
             false => { // Query
-              if to_bytecode || to_bytecode_text{
-                // Try to get the functor's address
-                let mut functor_address: usize = 0;
-                let instruction =
-                  Instruction::Binary {
-                    opcode: Operation::PutStructure,
-                    address1: functor_address, // Pointer to heap
-                    address2: address.idx()
-                  };
-                self.emit_bytecode(encode_instruction(instruction));
-                if to_bytecode_text {
-                      self.code_buffer.push_str(
-                        format!(
-                          "{}({}, {})\n",
-                          Operation::PutStructure,
-                          functor,
-                          address
-                        ).as_str()
-                      );
-                    }
+              let instruction =
+                Instruction::Binary {
+                  opcode: Operation::PutStructure,
+                  address1: self.intern_functor(&functor), // Pointer to code
+                  address2: register_address
+                };
+              self.emit_bytecode(encode_instruction(instruction));
+
+              if to_assembly {
+                self.code_buffer.push_str(
+                  // Functors are specially formatted
+                  format!(
+                    "{}({}, {})\n",
+                    Operation::PutStructure,
+                    functor,
+                    register_address
+                  ).as_str()
+                );
               }
               if interpret{
-                self.put_structure(&functor, &address);
+                self.put_structure(&functor, &register_address);
               }
             }
 
           } // end match is_program
 
-          self.rp = address.idx() as usize;
+          // Update the register pointer
+          self.rp = register_address.idx();
 
         } // end is assignment
 
@@ -346,18 +348,17 @@ impl WVM {
               match is_program {
 
                 true  => {  // Program
-                  if to_bytecode || to_bytecode_text{
-                    let instruction =
-                      Instruction::Unary {
-                        opcode: Operation::UnifyValue,
-                        address: address.idx()
-                      };
-                    self.emit_bytecode(encode_instruction(instruction));
-                    if to_bytecode_text {
-                      self.code_buffer.push_str(
-                        format!("{}({})\n", Operation::UnifyValue, address).as_str()
-                      );
-                    }
+                  let instruction =
+                    Instruction::Unary {
+                      opcode: Operation::UnifyValue,
+                      address: address
+                    };
+                  self.emit_bytecode(encode_instruction(instruction));
+
+                  if to_assembly {
+                    self.code_buffer.push_str(
+                      format!("{}\n", instruction).as_str()
+                    );
                   }
                   if interpret{
                     self.unify_value(&address);
@@ -365,18 +366,16 @@ impl WVM {
                 }
 
                 false => { // Query
-                  if to_bytecode || to_bytecode_text{
-                    let instruction =
-                      Instruction::Unary {
-                        opcode: Operation::SetValue,
-                        address: address.idx()
-                      };
-                    self.emit_bytecode(encode_instruction(instruction));
-                    if to_bytecode_text {
-                      self.code_buffer.push_str(
-                        format!("{}({})\n", Operation::SetValue, address).as_str()
-                      );
-                    }
+                  let instruction =
+                    Instruction::Unary {
+                      opcode: Operation::SetValue,
+                      address: address
+                    };
+                  self.emit_bytecode(encode_instruction(instruction));
+                  if to_assembly {
+                    self.code_buffer.push_str(
+                      format!("{}\n", instruction).as_str()
+                    );
                   }
                   if interpret{
                     self.set_value(&address);
@@ -392,18 +391,17 @@ impl WVM {
               match is_program {
 
                 true  => {  // Program
-                  if to_bytecode || to_bytecode_text{
-                    let instruction =
-                      Instruction::Unary {
-                        opcode: Operation::UnifyVariable,
-                        address: address.idx()
-                      };
-                    self.emit_bytecode(encode_instruction(instruction));
-                    if to_bytecode_text {
-                      self.code_buffer.push_str(
-                        format!("{}({})\n", Operation::UnifyVariable, address).as_str()
-                      );
-                    }
+                  let instruction =
+                    Instruction::Unary {
+                      opcode: Operation::UnifyVariable,
+                      address: address
+                    };
+                  self.emit_bytecode(encode_instruction(instruction));
+
+                  if to_assembly {
+                    self.code_buffer.push_str(
+                      format!("{}\n", instruction).as_str()
+                    );
                   }
                   if interpret{
                     self.unify_variable(&address);
@@ -411,25 +409,24 @@ impl WVM {
                 }
 
                 false => { // Query
-                  if to_bytecode || to_bytecode_text{
-                    let instruction =
-                      Instruction::Unary {
-                        opcode: Operation::SetVariable,
-                        address: address.idx()
-                      };
-                    self.emit_bytecode(encode_instruction(instruction));
-                    if to_bytecode_text {
-                      self.code_buffer.push_str(
-                        format!("{}({})\n", Operation::SetVariable, address).as_str()
-                      );
-                    }
+                  let instruction =
+                    Instruction::Unary {
+                      opcode: Operation::SetVariable,
+                      address: address
+                    };
+                  self.emit_bytecode(encode_instruction(instruction));
+
+                  if to_assembly {
+                    self.code_buffer.push_str(
+                      format!("{}\n", instruction).as_str()
+                    );
                   }
                   if interpret{
                     self.set_variable(&address);
                   }
                 }
 
-              }
+              } // end match is_program
             }
 
           } // end if seen address before
@@ -445,6 +442,7 @@ impl WVM {
     } // end iterate over tokens
   }
 
+  /// This method only inserts bytes into `self.code`.
   fn emit_bytecode(&mut self, instruction: EncodedInstruction){
     match instruction {
 
@@ -481,44 +479,48 @@ impl WVM {
   /**
     Binds an unbound variable at one address to the other address. If both are unbound, the first
      is bound to the second (arbitrarily).
+
+     address1: heap address
+     address2: register address
   */
-  fn bind(&mut self, add1: &Address, add2: &Address){
-    #[cfg(feature = "trace_computation")] print!("bind({}, {}): ", add1, add2);
+  fn bind(&mut self, address1: &Address, address2: &Address){
+    #[cfg(feature = "trace_computation")] print!("bind({}, {}): ", address1, address2);
 
-    let cell1 = self.value_at(add1);
-    let cell2 = self.value_at(add2);
+    let cell1 = self.value_at(address1);
+    let cell2 = self.value_at(address2);
 
-    match (cell1, cell2){
+    match (&cell1, &cell2){
 
       // There are four branches instead of two in order to prefer binding a variable in a
       // register to a variable on the heap over the reverse.
-      (Cell::REF(add), _) if *add1 == add && add1.is_register() => {
+      (Cell::REF(address), _) if address1 == address && address1.is_register() => {
         // `cell1` is a register variable. Bind to cell2.
-        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", add1, add2);
-        self.set_value_at(&add1, &Cell::REF(*add2));
-      },
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address1, address2);
+        self.set_value_at(&address1, &Cell::REF(*address2));
+      }
 
-      (_, Cell::REF(add)) if *add2 == add && add2.is_register() => {
+      (_, Cell::REF(address)) if address2 == address && address2.is_register() => {
         // `cell2` is a register variable. Bind to cell1.
-        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", add2, add1);
-        self.set_value_at(&add2, &Cell::REF(*add1));
-      },
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address2, address1);
+        self.set_value_at(&address2, &Cell::REF(*address1));
+      }
 
-      (Cell::REF(add), _) if *add1 == add => {
+      (Cell::REF(address), _) if address1 == address => {
         // `cell1` is a variable. Bind to cell2.
-        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", add1, add2);
-        self.set_value_at(&add1, &Cell::REF(*add2));
-      },
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address1, address2);
+        self.set_value_at(&address1, &Cell::REF(*address2));
+      }
 
-      (_, Cell::REF(add)) if *add2 == add => {
+      (_, Cell::REF(address)) if address2 == address => {
         // `cell2` is a variable. Bind to cell1.
-        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", add2, add1);
-        self.set_value_at(&add2, &Cell::REF(*add1));
-      },
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address2, address1);
+        self.set_value_at(&address2, &Cell::REF(*address1));
+      }
 
-      _                                   => {
+      _ => {
         // Neither `cell1` nor `cell2` are variables, an error state.
-        unreachable!("Unreachable: bind called without a variable.");
+        unreachable!("Unreachable: bind called without a variable. Found:\n\t{}\n\t{}",
+                     cell1, cell2);
       }
     }
   }
@@ -532,7 +534,7 @@ impl WVM {
   */
   fn put_structure(& mut self, functor: &Functor, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")] println!("put_structure({}, {})", functor, reg_ptr);
+    #[cfg(feature = "trace_computation")] println!("PutStructure({}, {})", functor, reg_ptr);
 
     let cell = Cell::STR(Address::from_heap_idx(self.heap.len() + 1));
     self.heap.push(cell.clone());
@@ -548,7 +550,7 @@ impl WVM {
   */
   fn set_variable(&mut self, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")] println!("set_variable({})", reg_ptr);
+    #[cfg(feature = "trace_computation")] println!("SetVariable({})", reg_ptr);
 
     let cell = Cell::REF( Address::from_heap_idx( self.heap.len()) );
     self.heap.push(cell.clone());
@@ -566,7 +568,7 @@ impl WVM {
   */
   fn set_value(&mut self, reg_ptr: &Address) {
     reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")] println!("set_value({})", reg_ptr);
+    #[cfg(feature = "trace_computation")] println!("SetValue({})", reg_ptr);
 
     self.heap.push(self.value_at(reg_ptr));
   }
@@ -574,53 +576,52 @@ impl WVM {
   /**
     Either matches a functor, binds a variable to a new functor value, or fails.
 
-    Note: `reg_ptr` must be a pointer to a register, but this contract is not statically checked.
-          Similarly, `functor_address` must be a code address.
+    Note: `register_address` must be a pointer to a register, but this contract is not statically checked.
   */
-  fn get_structure(&mut self, functor: &Functor, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn get_structure(&mut self, functor: &Functor, register_address: &Address){
+    register_address.require_register();
 
-    let address     = self.dereference(reg_ptr);
-    let cell_at_add = self.value_at(&address);
+    let target_address = self.dereference(register_address);
+    let target_cell = self.value_at(&target_address);
 
-    match cell_at_add {
+    match target_cell {
 
       Cell::REF(_) => {
-        // A variable. Create a new functor structure for `funct` on the stack, bind the
+        // A variable. Create a new functor structure for `functor` on the stack, bind the
         // variable to the functor, and set `mode` to `Mode::Write`.
         #[cfg(feature = "trace_computation")]
-          println!("get_structure({}, {}): creating struct", functor, reg_ptr);
+          println!("GetStructure({}, {}): creating struct", functor, register_address);
 
-        let funct_add = Address::from_heap_idx(self.heap.len() + 1);
-        let cell      = Cell::STR(funct_add);
+        let functor_address = Address::from_heap_idx(self.heap.len() + 1);
+        let cell      = Cell::STR(functor_address);
         self.mode     = Mode::Write;
 
-        self.heap.push(cell.clone());
+        self.heap.push(cell);
         self.heap.push(Cell::Functor(functor.clone()));
-        self.bind(&address, &funct_add);
+        self.bind(&target_address, &functor_address);
       },
 
-      Cell::STR(heap_ptr @ Address::HeapPtr(_)) => {
+      Cell::STR(heap_address @ Address::Heap(_)) => {
         // A pointer to a functor.
-        if self.heap[heap_ptr.idx()] == Cell::Functor(functor.clone()) {
+        if self.heap[heap_address.idx()] == Cell::Functor(functor.clone()) {
           #[cfg(feature = "trace_computation")]
-            println!("get_structure({}, {}): functor already on stack", functor, reg_ptr);
+            println!("GetStructure({}, {}): functor already on stack", functor, register_address);
 
-          self.hp   = (heap_ptr.idx() + 1) as usize;
+          self.hp   = heap_address.idx() + 1;
           self.mode = Mode::Read;
 
         } else{
-          // This is an error condition that should not happen in correct programs.
           #[cfg(feature = "trace_computation")]
-            println!("get_structure({}, {}) - STR points to nonexistent functor", functor, reg_ptr);
+            println!("GetStructure({}, {}) - STR points to different functor", functor, register_address);
           self.fail = true;
         }
       }
 
-      _ => {
+      _c => {
         // This is an error condition that should not happen in correct programs.
         #[cfg(feature = "trace_computation")]
-          println!("get_structure({}, {}) - neither REF nor STR found: {}", functor, reg_ptr, address);
+          println!("GetStructure({}, {}) - neither REF nor STR found: {}",
+                   functor, register_address, _c);
         self.fail = true;
       }
     };
@@ -632,22 +633,22 @@ impl WVM {
 
     Note: `ptr` must be a register pointer, but this contract is not statically checked.
   */
-  fn unify_variable(&mut self, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn unify_variable(&mut self, register_address: &Address){
+    register_address.require_register();
 
     match self.mode {
 
       Mode::Read  => {
         #[cfg(feature = "trace_computation")]
-          println!("unify_variable({}):  {} <- H[S={}]", reg_ptr, reg_ptr, self.hp);
+          println!("UnifyVariable({}):  {} <- H[S={}]", register_address, register_address, self.hp);
         // ToDo: Extra copy here:
         let value = &self.heap[self.hp].clone();
-        self.set_value_at(reg_ptr, value);
+        self.set_value_at(register_address, value);
       }
 
       Mode::Write => {
-        #[cfg(feature = "trace_computation")] print!("unify_variable({}):  ", reg_ptr);
-        self.set_variable(reg_ptr)
+        #[cfg(feature = "trace_computation")] print!("UnifyVariable({}):  ", register_address);
+        self.set_variable(register_address)
       }
 
     } // end match mode
@@ -666,12 +667,12 @@ impl WVM {
     match self.mode {
 
       Mode::Read  => {
-        #[cfg(feature = "trace_computation")] println!("unify_value({}):  unifying", reg_ptr);
+        #[cfg(feature = "trace_computation")] println!("UnifyValue({}):  unifying", reg_ptr);
         self.unify(*reg_ptr, Address::from_heap_idx(self.hp));
       }
 
       Mode::Write => {
-        #[cfg(feature = "trace_computation")] print!("unify_value({}):  ", reg_ptr);
+        #[cfg(feature = "trace_computation")] print!("UnifyValue({}):  ", reg_ptr);
         self.set_value(reg_ptr);
       }
     }

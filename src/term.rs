@@ -10,7 +10,7 @@ use string_cache::DefaultAtom;
 use crate::functor::Functor;
 
 pub type RcTerm = Rc<Term>;
-pub type TermVec = Rc<Vec<Rc<Term>>>;
+pub type TermVec = Vec<Rc<Term>>;
 
 // region Term declarations and definitions
 
@@ -35,13 +35,13 @@ pub enum Term {
 
 impl Display for Term{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", self.fmt_aux(&"".to_string(), &"".to_string()))
+    write!(f, "{}", self.fmt_aux(&"", &""))
   }
 }
 
 impl Term{
 
-  fn fmt_aux(&self, prefix: &String, child_prefix: &String) -> String {
+  fn fmt_aux(&self, prefix: &str, child_prefix: &str) -> String {
     match self {
       Term::Structure{ functor, args } => {
         let mut buffer =
@@ -134,6 +134,7 @@ impl Iterator for TermIter{
 
 // endregion TermIter
 
+/*
 #[cfg(test)]
 mod tests {
   use super::*;
@@ -150,10 +151,11 @@ mod tests {
     })
   }
 
-  pub fn new_struct_of_term(name: char, term: &RcTerm) -> RcTerm {
+  pub fn new_struct_of_term(name: &str, term: &RcTerm) -> RcTerm {
     Rc::new(Term::Structure {
-      functor: Functor{ name: DefaultAtom::from(name), arity},
-      args: term.to_term_vec()
+      functor: Functor{ name: DefaultAtom::from(name), arity: 1},
+      args: vc![term]
     })
   }
 }
+*/

@@ -65,8 +65,8 @@ pub fn parse<'b>(input: &'b str) -> RcTerm{
 }
 
 
-fn parse_aux(text_ref: &Box<RefCell<CharIter>>) -> RcTerm {
-  let mut text = RefCell::borrow_mut(&*text_ref);
+fn parse_aux(text_ref: &RefCell<CharIter>) -> RcTerm {
+  let mut text = text_ref.borrow_mut();
 
   text.trim_left();
   let next_char: char;
@@ -103,7 +103,7 @@ fn parse_aux(text_ref: &Box<RefCell<CharIter>>) -> RcTerm {
     Rc::new(
       Term::Structure {
       functor: Functor{name, arity: args.len() as ArityType},
-      args: args.clone()
+      args
     })
   }
 
@@ -166,15 +166,15 @@ fn parse_aux(text_ref: &Box<RefCell<CharIter>>) -> RcTerm {
   }
 }
 
-fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
-  let mut args: Box<Vec<RcTerm>> = Box::new(Vec::new());
-  let mut text = RefCell::borrow_mut(&*text_ref);
+fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
+  let mut args: Vec<RcTerm> = Vec::new();
+  let mut text = text_ref.borrow_mut();
 
   text.trim_left();
   if let Some(c) = text.peek(){
     if c != '(' {
       // Constants can omit parentheses, as they have no arguments.
-      return args.into();
+      return args;
     } else {
       // Eat `(`
       text.next();
@@ -187,16 +187,16 @@ fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
     // `parse_aux` needs a mutable borrow of text, so drop this one.
     drop(text);
     term = parse_aux(text_ref);
-    text = RefCell::borrow_mut(&*text_ref);
+    text = text_ref.borrow_mut();
     if text.is_empty(){
       eprintln!("Reached EOL while looking for `)`.");
       panic!();
     }
 
     if *term != Term::Empty {
-      args.push(term.into());
+      args.push(term);
     } else {
-      return args.into();
+      return args;
     }
 
     text.trim_left();
@@ -219,5 +219,5 @@ fn parse_arg_list(text_ref: &Box<RefCell<CharIter>>) -> TermVec {
 
     } // end match peek
   } // end while
-  return args.into();
+  args
 }

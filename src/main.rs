@@ -6,23 +6,24 @@
 #[macro_use] extern crate lazy_static;
 extern crate strum;
 #[macro_use] extern crate strum_macros;
-#[macro_use] extern crate nom;
+extern crate nom;
+extern crate bimap;
 
-// mod wvm;
-// mod cell;
+mod wvm;
+mod cell;
 mod address;
-// mod parser;
-// mod chariter;
-// mod functor;
-// mod term;
-// mod token;
+mod parser;
+mod chariter;
+mod functor;
+mod term;
+mod token;
 mod bytecode;
 
-// use crate::wvm::WVM;
+use crate::wvm::WVM;
 
 fn main() {
 
-  /*
+
   #[cfg(feature = "trace_computation")]
   println!("Computation Tracing ENABLED");
 
@@ -32,7 +33,7 @@ fn main() {
   // println!("Parse Tree:\n{}\n", ast);
 
   let mut machine = WVM::new();
-  machine.compile(text, true, true, true);
+  machine.compile(text, true, true);
 
   // println!("Internal Machine State:\n{}", machine);
 
@@ -41,12 +42,12 @@ fn main() {
   println!("Program Expression: {}", text);
   // println!("Parse Tree:\n{}\n", ast);
 
-  machine.compile(text, true, true, true);
+  machine.compile(text, true, true);
 
   // println!("Internal Machine State:\n{}", machine);
-  */
 
 
+/*
   let text = "SetVariable(2)
 SetVariable(5   )
 PutStructure(1, 4)
@@ -95,5 +96,5 @@ GetStructure(345,7)
       print!("{}", e);
     }
   }
-
+*/
 }

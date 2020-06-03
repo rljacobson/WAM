@@ -23,8 +23,9 @@ pub enum EncodedInstruction{
   DoubleWord(DoubleWord)
 }
 
-pub fn try_decode_instruction(instruction: DoubleWord) -> Option<Instruction> {
-  let opcode = match Operation::try_from((instruction & 0xFF) as u8) {
+/*
+pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
+  let opcode = match Operation::try_from((bin_inst & 0xFF) as u8) {
     Ok(v) => Some(v),
     Err(_e) => None // ToDo: panic!("{}", e);
   };
@@ -38,14 +39,14 @@ pub fn try_decode_instruction(instruction: DoubleWord) -> Option<Instruction> {
       // [OpCode:8][Address:24][Address:24][Reserved:8]
       Instruction::Binary {
         opcode,
-        address1: ((instruction >> 8) & 0xFFFFFF) as AddressType,
-        address2: (instruction >> 32) as AddressType,
+        address1: ((bin_inst >> 8) & 0xFFFFFF) as AddressType,
+        address2: (bin_inst >> 32) as AddressType,
       }
     } else if Into::<u8>::into(opcode) < 12 {
       // [OpCode:8][Address:24]
       Instruction::Unary {
         opcode,
-        address: (instruction >> 8) as AddressType
+        address: (bin_inst >> 8) as AddressType
       }
     } else {
       // [OpCode:8]
@@ -54,6 +55,8 @@ pub fn try_decode_instruction(instruction: DoubleWord) -> Option<Instruction> {
 
   Some(instruction)
 }
+*/
+
 
 /**
   Encodes the instruction into bytecode. It is the caller's responsibility to
@@ -62,20 +65,23 @@ pub fn try_decode_instruction(instruction: DoubleWord) -> Option<Instruction> {
 pub fn encode_instruction(instruction: Instruction) -> EncodedInstruction{
   match instruction{
 
-    Instruction::Binary {opcode, address1: add1, address2: add2 } => {
+    Instruction::Binary {opcode, address1, address2 } => {
+      let add1 = address1.enc();
+      let add2 = address2.enc();
       // [OpCode:8][Address:24][Address:24][Reserved:8]
       EncodedInstruction::DoubleWord(
         ( opcode as DoubleWord)        +
-          ((add1   as DoubleWord) << 8 ) +
-          ((add2   as DoubleWord) << 32)
+          ((add1 as DoubleWord) << 8 ) +
+          ((add2 as DoubleWord) << 32)
       )
     },
 
     Instruction::Unary {opcode, address} => {
+      let add = address.enc();
       // [OpCode:8][Address:24]
       EncodedInstruction::Word(
-        ( opcode as Word)        +
-          ((address   as Word) << 8 )
+        (opcode as Word)        +
+          ((add as Word) << 8 )
       )
     },
 

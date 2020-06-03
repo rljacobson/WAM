@@ -27,16 +27,16 @@
 */
 
 mod binary;
-mod assembly;
+// mod assembly;
 
 use strum_macros::{Display as StrumDisplay, IntoStaticStr};
 use num_enum::{TryFromPrimitive, IntoPrimitive};
 // use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 
-use crate::address::AddressType;
+use crate::address::{Address};
 pub use binary::{encode_instruction, EncodedInstruction, Word, TwoWords};
-pub use assembly::parse_assembly;
+// pub use assembly::parse_assembly;
 
 /**
   Opcodes of the virtual machine.
@@ -99,13 +99,13 @@ pub enum Instruction {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]
   Binary {
     opcode: Operation,
-    address1: AddressType,
-    address2: AddressType
+    address1: Address,
+    address2: Address
   },
   /// [OpCode:8][Address:24]
   Unary {
     opcode: Operation,
-    address: AddressType
+    address: Address
   },
   /// [OpCode:8][Reserved:24]
   Nullary(Operation),

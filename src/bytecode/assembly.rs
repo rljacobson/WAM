@@ -27,7 +27,7 @@ use nom::{
   sequence::terminated
 };
 
-use crate::address::AddressType;
+use crate::address::{AddressType, Address};
 use crate::bytecode::{Instruction, Operation};
 
 // An `Either`-like enum to transparently collect source code errors.
@@ -51,6 +51,7 @@ pub enum ParsedAssemblySyntax<'a> {
   }
 }
 use ParsedAssemblySyntax as Syntax;
+use nom::branch::alt;
 
 impl<'a> Display for ParsedAssemblySyntax<'a>{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -130,7 +131,7 @@ pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind
         map(preceded(space0, binary_inst_p),
           | out | {
             let mut ln_ref = line_number.borrow_mut();
-            *ln_ref = *ln_ref + 1;
+            *ln_ref += 1;
             let opcode_result = Operation::from_str(out.0);
             match opcode_result {
               Ok(operation) if operation.arity() == 2 =>
@@ -160,7 +161,7 @@ pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind
         map(preceded(space0, unary_inst_p),
           |out| {
             let mut ln_ref = line_number.borrow_mut();
-            *ln_ref = *ln_ref + 1;
+            *ln_ref += 1;
             let opcode_result = Operation::from_str(out.0);
             match opcode_result {
               Ok(operation) if operation.arity() == 1 =>
@@ -189,7 +190,7 @@ pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind
         map(preceded(space0, nullary_inst_p),
           |out| {
             let mut ln_ref = line_number.borrow_mut();
-            *ln_ref = *ln_ref + 1;
+            *ln_ref += 1;
             let opcode_result = Operation::from_str(out.0);
             match opcode_result {
               Ok(operation) if operation.arity() == 0 =>
