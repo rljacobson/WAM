@@ -14,7 +14,8 @@ use crate::address::*;
 use crate::cell::*;
 use crate::token::*;
 use crate::functor::*;
-use crate::instructions::*;
+use crate::bytecode::*;
+use crate::bytecode::{EncodedInstruction};
 
 #[allow(non_snake_case)]
 pub struct WVM {
@@ -280,19 +281,19 @@ impl WVM {
             true  => {  // Program
               if to_bytecode || to_bytecode_text{
                 // Try to get the functor's address
-                let mut functor_address: usize = 0;
+                let mut functor_address: AddressType = 0;
                 let instruction =
-                  InstructionArguments::Binary {
-                    opcode: Opcode::GetStructure,
-                    address1: functor_address as u32, // Pointer to heap
-                    address2: address.enc()
+                  Instruction::Binary {
+                    opcode: Operation::GetStructure,
+                    address1: functor_address, // Pointer to heap
+                    address2: address.idx()
                   };
                 self.emit_bytecode(encode_instruction(instruction));
                 if to_bytecode_text {
                   self.code_buffer.push_str(
                     format!(
                       "{}({}, {})\n",
-                      Opcode::GetStructure,
+                      Operation::GetStructure,
                       functor,
                       address
                     ).as_str()
@@ -309,17 +310,17 @@ impl WVM {
                 // Try to get the functor's address
                 let mut functor_address: usize = 0;
                 let instruction =
-                  InstructionArguments::Binary {
-                    opcode: Opcode::PutStructure,
-                    address1: functor_address as u32, // Pointer to heap
-                    address2: address.enc()
+                  Instruction::Binary {
+                    opcode: Operation::PutStructure,
+                    address1: functor_address, // Pointer to heap
+                    address2: address.idx()
                   };
                 self.emit_bytecode(encode_instruction(instruction));
                 if to_bytecode_text {
                       self.code_buffer.push_str(
                         format!(
                           "{}({}, {})\n",
-                          Opcode::PutStructure,
+                          Operation::PutStructure,
                           functor,
                           address
                         ).as_str()
@@ -347,14 +348,14 @@ impl WVM {
                 true  => {  // Program
                   if to_bytecode || to_bytecode_text{
                     let instruction =
-                      InstructionArguments::Unary {
-                        opcode: Opcode::UnifyValue,
-                        address: address.enc()
+                      Instruction::Unary {
+                        opcode: Operation::UnifyValue,
+                        address: address.idx()
                       };
                     self.emit_bytecode(encode_instruction(instruction));
                     if to_bytecode_text {
                       self.code_buffer.push_str(
-                        format!("{}({})\n", Opcode::UnifyValue, address).as_str()
+                        format!("{}({})\n", Operation::UnifyValue, address).as_str()
                       );
                     }
                   }
@@ -366,14 +367,14 @@ impl WVM {
                 false => { // Query
                   if to_bytecode || to_bytecode_text{
                     let instruction =
-                      InstructionArguments::Unary {
-                        opcode: Opcode::SetValue,
-                        address: address.enc()
+                      Instruction::Unary {
+                        opcode: Operation::SetValue,
+                        address: address.idx()
                       };
                     self.emit_bytecode(encode_instruction(instruction));
                     if to_bytecode_text {
                       self.code_buffer.push_str(
-                        format!("{}({})\n", Opcode::SetValue, address).as_str()
+                        format!("{}({})\n", Operation::SetValue, address).as_str()
                       );
                     }
                   }
@@ -393,14 +394,14 @@ impl WVM {
                 true  => {  // Program
                   if to_bytecode || to_bytecode_text{
                     let instruction =
-                      InstructionArguments::Unary {
-                        opcode: Opcode::UnifyVariable,
-                        address: address.enc()
+                      Instruction::Unary {
+                        opcode: Operation::UnifyVariable,
+                        address: address.idx()
                       };
                     self.emit_bytecode(encode_instruction(instruction));
                     if to_bytecode_text {
                       self.code_buffer.push_str(
-                        format!("{}({})\n", Opcode::UnifyVariable, address).as_str()
+                        format!("{}({})\n", Operation::UnifyVariable, address).as_str()
                       );
                     }
                   }
@@ -412,14 +413,14 @@ impl WVM {
                 false => { // Query
                   if to_bytecode || to_bytecode_text{
                     let instruction =
-                      InstructionArguments::Unary {
-                        opcode: Opcode::SetVariable,
-                        address: address.enc()
+                      Instruction::Unary {
+                        opcode: Operation::SetVariable,
+                        address: address.idx()
                       };
                     self.emit_bytecode(encode_instruction(instruction));
                     if to_bytecode_text {
                       self.code_buffer.push_str(
-                        format!("{}({})\n", Opcode::SetVariable, address).as_str()
+                        format!("{}({})\n", Operation::SetVariable, address).as_str()
                       );
                     }
                   }

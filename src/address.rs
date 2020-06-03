@@ -4,8 +4,9 @@
 use std::ops::Add;
 use std::fmt::{Display, Formatter};
 
-use crate::instructions::Word;
+use crate::bytecode::Word;
 
+// `AddressType` is `usize`, as it is naturally an index into a memory store.
 pub type AddressType = usize;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
