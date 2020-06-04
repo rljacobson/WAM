@@ -14,7 +14,6 @@ use crate::cell::*;
 use crate::token::*;
 use crate::functor::*;
 use crate::bytecode::*;
-use crate::bytecode::EncodedInstruction;
 use crate::parser::parse as parse_source_code;
 
 lazy_static! {
@@ -289,7 +288,7 @@ impl WVM {
 
           // The instruction we are about to push onto `self.code`
           // will be the first instruction of `procedure`.
-          let procedure_address = self.code.len() as AddressType;
+          let procedure_address = self.code.len() as AddressNumberType;
           self.labels.insert(functor.clone(), Address::Code(procedure_address));
           match is_program {
 
@@ -718,6 +717,134 @@ impl WVM {
       }
     }
   }
+
+  // M_1 Operations
+
+  fn put_variable(&mut self, address1: &Address, address2: &Address){
+
+  }
+
+  fn get_variable(&mut self, address1: &Address, address2: &Address){
+
+  }
+
+  fn put_value(&mut self, address1: &Address, address2: &Address){
+
+  }
+
+  fn get_value(&mut self, address1: &Address, address2: &Address){
+
+  }
+
+  /// A function call to the function with entry point `address`.
+  fn call(&mut self, address: &Address) {
+    self.ip = address.idx();
+  }
+
+  // endregion
+
+  // region VM control methods
+
+  /**
+    Begin executing of the bytecode starting at code address `address`. The instruction pointer
+    `ip` is set to `address`, and the `fail` flag is set to `false` before execution begins.
+    Otherwise, the caller is responsible for setting/resetting the vm registers and memory stores.
+
+    If we cared about speed, we would optimize this function and the functions it calls as much
+    as possible. But we don't care about speed.
+  */
+  fn run(&mut self, address: &Address){
+    address.require_code();
+
+    self.ip = address.idx();
+    self.fail = false;
+
+    let mut words = TwoWords{low:0, high:0 };
+    while self.ip < self.code.len() {
+      // Instructions increment `ip` themselves.
+      words.low = self.code[self.ip];
+
+      let encoded =
+        match is_double_word_instruction(&words.low) {
+          true if self.ip + 1 < self.code.len() => {
+            words.high = self.code[self.ip + 1];
+            EncodedInstruction::DoubleWord(words)
+          }
+          true => {
+            // Needs another word, but there are no more.
+            panic!("Error: Unexpectedly ran out of bytecode.")
+          }
+          false => {
+            EncodedInstruction::Word(words.low)
+          }
+        };
+
+      let instruction: Instruction;
+      let maybe_instruction = try_decode_instruction(&encoded);
+      match maybe_instruction {
+        Some(i) => {
+          instruction = i;
+        }
+        None => {
+          eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
+          panic!();
+        }
+      }
+
+      self.exec(&instruction);
+    }
+  }
+
+  /**
+    Executes a single instruction, incrementing/setting `ip` and other state as appropriate to
+    the instruction.
+  */
+  fn exec(&mut self, instruction: &Instruction){
+    use Operation::*;
+
+    match &instruction {
+      /*
+        See bytecode/instruction.rs for the list of operations. Each opcode match needs:
+          1. an `Operation`
+          2. that matches the function call, and
+          3. to incrememnt `self.ip` according to the number of words in the instruction.
+      */
+
+      Instruction::BinaryFunctor { opcode, address, functor } => {
+        match opcode {
+          PutStructure => { self.put_structure(functor, address); self.ip += 2;}
+          GetStructure => { self.get_structure(functor, address); self.ip += 2;}
+          _            => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+        }
+      }
+      Instruction::Binary { opcode, address1, address2 } => {
+        match opcode {
+          PutVariable => { self.put_variable(address1, address2); self.ip += 2; }
+          GetVariable => { self.get_variable(address1, address2); self.ip += 2; }
+          PutValue    => { self.put_value(address1, address2);    self.ip += 2; }
+          GetValue    => { self.get_value(address1, address2);    self.ip += 2; }
+          _           => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+        }
+      }
+      Instruction::Unary { opcode, address } => {
+        match opcode {
+          SetVariable   => { self.set_variable(address);   self.ip += 1; }
+          SetValue      => { self.set_value(address);      self.ip += 1; }
+          UnifyVariable => { self.unify_variable(address); self.ip += 1; }
+          UnifyValue    => { self.unify_value(address);    self.ip += 1; }
+          Call          => { self.call(address);  /* Call sets `self.ip`.  */ }
+          _             => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+        }
+      }
+      Instruction::Nullary(opcode) => {
+        match opcode {
+          Proceed => { /* Proceed is a noop in M_1. */ }
+          _       => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+        }
+      }
+    }
+  }
+
   // endregion
 
 }

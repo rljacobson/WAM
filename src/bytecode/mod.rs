@@ -30,5 +30,7 @@ mod binary;
 mod instruction;
 // mod assembly;
 
-pub use binary::{encode_instruction, try_decode_instruction, EncodedInstruction, Word, DoubleWord, TwoWords};
+pub use binary::{encode_instruction, try_decode_instruction, is_double_word_instruction,
+                 EncodedInstruction, Word,
+                 DoubleWord, TwoWords};
 pub use instruction::{Instruction, Operation};

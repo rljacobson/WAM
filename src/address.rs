@@ -6,60 +6,60 @@ use std::fmt::{Display, Formatter};
 
 use bimap::BiMap;
 
-use crate::bytecode::DoubleWord;
+use crate::bytecode::Word;
 use crate::functor::Functor;
 
 // `AddressType` is `usize`, as it is naturally an index into a memory store.
-pub type AddressType = usize;
+pub type AddressNumberType = usize;
 
 #[derive(Copy, Clone, Ord, PartialOrd, Eq, PartialEq, Hash, Debug)]
 pub enum Address{
   /// A "pointer" to a cell is an index into the `HEAP`. We could call it a cell reference.
-  Heap(AddressType),
+  Heap(AddressNumberType),
   /// A "pointer" to a register is an index into the register vector `X`.
-  Register(AddressType),
+  Register(AddressNumberType),
   /// An index into code memory
-  Code(AddressType),
+  Code(AddressNumberType),
   /// A virtual address for functor symbols
-  Functor(AddressType)
+  Functor(AddressNumberType)
 }
 
 impl Address {
   /// Converts the address to an index into the corresponding vector.
-  pub fn idx(&self) -> AddressType{
+  pub fn idx(&self) -> AddressNumberType {
     match self{
       | Address::Heap(i)
       | Address::Functor(i)
-      | Address::Code(i) => *i as AddressType,
+      | Address::Code(i) => *i as AddressNumberType,
       // Registers count from 1, so subtract 1 to convert to index.
-      Address::Register(i ) => (i-1) as AddressType,
+      Address::Register(i ) => (i-1) as AddressNumberType,
     }
   }
 
   /// Encodes the address into the bits as they appear in bytecode.
-  pub fn enc(&self) -> DoubleWord {
-    self.idx() as DoubleWord
+  pub fn enc(&self) -> Word {
+    self.idx() as Word
   }
 
   /// Converts an index into the heap vector to a heap address.
   pub fn from_heap_idx(heap_idx: usize) -> Address{
-    Address::Heap(heap_idx as AddressType)
+    Address::Heap(heap_idx as AddressNumberType)
   }
 
   /// Converts an index into the register vector to a register address.
   pub fn from_reg_idx(reg_idx: usize) -> Address{
-    Address::Register((reg_idx + 1) as AddressType)
+    Address::Register((reg_idx + 1) as AddressNumberType)
   }
 
   /// Converts an index into the heap vector to a heap address.
   #[allow(dead_code)]
   pub fn from_code_idx(heap_idx: usize) -> Address{
-    Address::Code(heap_idx as AddressType)
+    Address::Code(heap_idx as AddressNumberType)
   }
 
   // Converts a virtual functor address into an `Address:Functor`.
   pub fn from_funct_idx(funct_idx: usize) -> Address{
-    Address::Functor(funct_idx as AddressType)
+    Address::Functor(funct_idx as AddressNumberType)
   }
 
   /// Panics if the address is not a register pointer.
@@ -146,10 +146,10 @@ impl Display for Address{
 }
 
 // Increment an address
-impl Add<AddressType> for Address{
+impl Add<AddressNumberType> for Address{
   type Output = Address;
 
-  fn add(self, rhs: AddressType) -> Address{
+  fn add(self, rhs: AddressNumberType) -> Address{
     match self{
       Address::Heap(i) => {
         Address::Heap(i+rhs)

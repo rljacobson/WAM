@@ -10,14 +10,19 @@ use string_cache::DefaultAtom;
 use crate::address::Address;
 use crate::functor::{Functor, ArityType};
 use super::{Operation, Instruction};
-use crate::wvm::SYMBOLS;
+use crate::wvm::SYMBOLS; // ToDo: This dependency is frustrating.
 use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_BINARY_OPCODE, MAX_FUNCTOR_OPCODE};
-// ToDo: This dependency is frustrating.
 
 // If you change this you must also change `encode_instruction` and `decode_instruction`.
 pub type Word = u32;
 pub type DoubleWord = u64;
-// Convenience for decomposing a DoubleWord into a high word and a low word:
+
+/*
+  Convenience for decomposing a DoubleWord into a high word and a low word. In fact, the
+  bytecode is designed so that no bit operations have to span a word boundary, so this is more
+  convenient that `DoubleWord` in general.
+*/
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct TwoWords {
   pub low: Word,
   pub high: Word
@@ -25,19 +30,26 @@ pub struct TwoWords {
 
 /// An `Either` type for an encoded instruction, allowing the instruction to be
 /// either one word or two.
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum EncodedInstruction{
   Word(Word),
-  DoubleWord(DoubleWord)
+  DoubleWord(TwoWords)
 }
 
 
-pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
-  let opcode = match Operation::try_from((bin_inst & 0xFF) as u8) {
+pub fn try_decode_instruction(encoded: &EncodedInstruction) -> Option<Instruction> {
+  let mut bytecode = TwoWords{ low: 0, high: 0 };
+  match &encoded {
+    EncodedInstruction::Word(w)        => { bytecode.low = *w; }
+    EncodedInstruction::DoubleWord(tw) => { bytecode = *tw; }
+  }
+
+  let opcode = match Operation::try_from((bytecode.low & 0xFF) as u8) {
     Ok(v)   => Some(v),
     Err(_e) => None // ToDo: panic!("{}", e);
   };
   if opcode == None{
-    return None
+    return None;
   }
 
   let opcode = opcode.unwrap();
@@ -48,8 +60,8 @@ pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
     // [OpCode:8][Address:24][Name:16][Arity:16]
     Instruction::BinaryFunctor {
       opcode,
-      address: Address::from_reg_idx( ((bin_inst >> 8) & 0xFFFFFF) as usize),
-      functor: decode_functor((bin_inst >> 32) as Word),
+      address: Address::from_reg_idx( (bytecode.low >> 8) as usize),
+      functor: decode_functor(&bytecode.high),
     }
   }
 
@@ -57,8 +69,8 @@ pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
     // [OpCode:8][Address:24][Address:24][Reserved:8]
     Instruction::Binary {
       opcode,
-      address1: Address::from_heap_idx(((bin_inst >> 8) & 0xFFFFFF) as usize),
-      address2: Address::from_reg_idx((bin_inst >> 32) as usize)
+      address1: Address::from_heap_idx((bytecode.low >> 8) as usize),
+      address2: Address::from_reg_idx(bytecode.high as usize)
     }
   }
 
@@ -66,7 +78,7 @@ pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
     // [OpCode:8][Address:24]
     Instruction::Unary {
       opcode,
-      address: Address::from_reg_idx((bin_inst >> 8) as usize)
+      address: Address::from_reg_idx((bytecode.low >> 8) as usize)
     }
   }
   else {
@@ -88,8 +100,10 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
 
     Instruction::BinaryFunctor {opcode, address, functor} => {
       EncodedInstruction::DoubleWord(
-        (Into::<u8>::into(*opcode) as DoubleWord) +
-          (address.enc() << 8 ) + (encode_functor(&functor) << 32)
+        TwoWords {
+          low: (Into::<u8>::into(*opcode) as Word) + (address.enc() << 8),
+          high: (encode_functor(&functor) << 32),
+        }
       )
     }
 
@@ -98,7 +112,10 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
       let add2 = address2.enc();
       // [OpCode:8][Address:24][Address:24][Reserved:8]
       EncodedInstruction::DoubleWord(
-        (Into::<u8>::into(*opcode) as DoubleWord) + (add1 << 8) + (add2 << 32)
+        TwoWords {
+          low: (Into::<u8>::into(*opcode) as Word) + (add1 << 8),
+          high: add2 << 32,
+        }
       )
     },
 
@@ -119,8 +136,8 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
 
 
 /// Returns the size in WORDS of an instruction for the corresponding opcode.
-pub fn instruction_size(opcode: Operation) -> u32{
-  match Into::<u8>::into(opcode) < MAX_DOUBLE_WORD_OPCODE {
+pub fn instruction_size(opcode: &Operation) -> u32{
+  match Into::<u8>::into(*opcode) < MAX_DOUBLE_WORD_OPCODE {
     true  => 2, // Two words
     false => 1  // One Word
   }
@@ -132,12 +149,12 @@ pub fn instruction_size(opcode: Operation) -> u32{
 
   Note that this function does not check if the input has a valid opcode.
 */
-pub fn is_double_word_instruction(word: Word) -> bool{
-  (word as u8) < MAX_DOUBLE_WORD_OPCODE
+pub fn is_double_word_instruction(word: &Word) -> bool{
+  (*word as u8) < MAX_DOUBLE_WORD_OPCODE
 }
 
 
-pub fn decode_functor(word: Word) -> Functor{
+pub fn decode_functor(word: &Word) -> Functor{
   let functor_address = Address::from_funct_idx((word & 0xFFFF) as usize);
   let mut symbols = SYMBOLS.lock().unwrap();
 
@@ -159,7 +176,7 @@ pub fn decode_functor(word: Word) -> Functor{
 
 }
 
-pub fn encode_functor(functor: &Functor) -> DoubleWord{
+pub fn encode_functor(functor: &Functor) -> Word{
   let mut symbols = SYMBOLS.lock().unwrap();
   let functor_idx = match symbols.get_by_left(functor) {
 
@@ -173,5 +190,5 @@ pub fn encode_functor(functor: &Functor) -> DoubleWord{
 
   };
 
-  ((functor.arity as DoubleWord) << 16) + (functor_idx as DoubleWord)
+  ((functor.arity as Word) << 16) + (functor_idx as Word)
 }
