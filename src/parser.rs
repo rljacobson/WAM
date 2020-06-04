@@ -32,16 +32,16 @@ use crate::term::{RcTerm, Term, TermVec};
 use crate::functor::{Functor, ArityType};
 
 
-/// Parses text to produce an abstract syntax tree made of `Term`s.
-pub fn parse<'b>(input: &'b str) -> RcTerm{
-  // A caller intending to compile the term should have done this already, but the parse function
-  // may be called for other reasons, e.g., to print out the AST.
-  let input =
-    if input.starts_with("?-"){ &input[2..] }
-    else { input };
+/// Parses text to produce abstract syntax trees made of `Term`s.
+/// Returns a tuple (atoms, queries).
+pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
+  // For M_1, all atoms are facts.
+  let mut atoms   :  TermVec = Vec::new();
+  let mut queries :  TermVec = Vec::new();
+
 
   if input.is_empty() {
-    return Rc::new(Term::Empty);
+    return (atoms, queries);
   }
 
   // We need multiple mutable borrows for recursive calls to parsing functions.
@@ -51,39 +51,77 @@ pub fn parse<'b>(input: &'b str) -> RcTerm{
         CharIter::<'b>::new(input)
       )
     );
-  let ast = parse_aux(&text_ref);
-  let mut text = RefCell::borrow_mut(&*text_ref);
 
-  // Allow trailing whitespace, but nothing more.
-  text.trim_left();
-  if !text.is_empty(){
-    eprintln!("Error: Expected end of term or query.");
-    panic!();
-  }
 
-  ast
+  loop {
+    let atom = parse_aux(&text_ref);
+    if let Term::Query(term) = &atom {
+      queries.push(term.clone());
+    } else {
+      atoms.push(Rc::new(atom));
+    }
+    let mut text = RefCell::borrow_mut(&*text_ref);
+
+    // Allow trailing whitespace, but nothing more.
+    text.trim_left();
+    if text.is_empty() {
+      break;
+    }
+  } // end loop
+
+  (atoms, queries)
 }
 
 
-fn parse_aux(text_ref: &RefCell<CharIter>) -> RcTerm {
+fn parse_aux(text_ref: &RefCell<CharIter>) -> Term {
   let mut text = text_ref.borrow_mut();
+  let mut next_char: char;
 
   text.trim_left();
-  let next_char: char;
 
-  match text.next(){
-    Some(c) => {
-      next_char = c;
-    },
-    None => {
-      return Rc::new(Term::Empty);
+  // Handle Comments, which require resetting `next_char`.
+  loop {
+    match text.next() {
+      Some(c) => {
+        next_char = c;
+      },
+      None => {
+        return Term::Empty;
+      }
     }
-  }
 
-  // A giant string of if-else's.
+    // Single-line comments
+    if next_char == '%' {
+      // Eat until EOL or EOF.
+      while text.peek() != None && text.next() != Some('\n'){
+        // Gobble
+      }
+    }
+    // In-line comments
+    else if next_char == '/' && text.peek() == Some('*'){
+      text.next();
+      // Eat until EOL or EOF.
+      while text.peek() != None {
+        // Gobble
+        next_char = text.next().unwrap();
+        if next_char == '*' && text.peek() == Some('/'){
+          text.next();
+          // Break inner while-loop, reset `next_char`
+          break;
+        }
+      }
+    } else {
+      // Not a comment, break outer loop.
+      break;
+    }
+
+    //reset `next_char` at the top of the loop.
+  } // end comment loop
+
+  // A giant string of if-else's //
 
   if next_char.is_lowercase(){
-    // Functor //
+    // Functor Structure //
     // Get the rest of the functor's name
     let name =
       match  text.get_prefix_match(char::is_alphanumeric){
@@ -100,36 +138,20 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> RcTerm {
     drop(text);
     let args = parse_arg_list(text_ref);
 
-    Rc::new(
-      Term::Structure {
+    Term::Structure {
       functor: Functor{name, arity: args.len() as ArityType},
       args
-    })
+    }
   }
 
   else if next_char == ',' || next_char == ')' {
     // The assumption here is that `parse_aux` was called recursively, and the current term has
     // been completely parsed.
-    Rc::new(Term::Empty)
+    Term::Empty
   }
 
   else if next_char.is_uppercase(){
-    // Either a register or a variable
-
-    /*
-    if next_char == 'X'{
-      if let Some(number) = text.get_prefix_match(char::is_numeric) {
-        // A register.
-        return Rc::new(Term::Register(
-          Address::RegPtr(
-            number.parse::<usize>().unwrap().into()
-          )
-        ));
-      }
-    } // end if register
-    */
-
-    // A variable, not a register. Get the rest of the name.
+    // A variable. Get the rest of the name.
     let name =
       match  text.get_prefix_match(char::is_alphanumeric){
 
@@ -140,18 +162,17 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> RcTerm {
         None => DefaultAtom::from(next_char.to_string())
 
       };
-    Rc::new(Term::Variable(name))
+    Term::Variable(name)
   }
 
   else if next_char == '?' {
-    // Note: There is no equivalent case for `Term::Program`. The caller should be handling this.
-    match text.peek() {
+    // Note: There is no equivalent case for `Term::Program`. Every non-query is a program.
+    match text.next() {
       Some('-') => {
-        text.next(); // Eat '-'
         // `parse_aux` needs a mutable borrow of text, so drop this one.
         drop(text);
-        let term = parse_aux(text_ref);
-        Rc::new(Term::Query(term))
+        // let term = ;
+        Term::Query(Rc::new(parse_aux(text_ref)))
       }
       _ => {
         eprintln!("Error: Unexpected character `{}`", next_char);
@@ -186,7 +207,7 @@ fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
   loop {
     // `parse_aux` needs a mutable borrow of text, so drop this one.
     drop(text);
-    term = parse_aux(text_ref);
+    term = Rc::new(parse_aux(text_ref));
     text = text_ref.borrow_mut();
     if text.is_empty(){
       eprintln!("Reached EOL while looking for `)`.");

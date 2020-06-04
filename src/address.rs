@@ -56,7 +56,7 @@ impl Address {
     Address::Code(heap_idx as AddressType)
   }
 
-  // Converts a virtual functor address into an `Address:Functor`
+  // Converts a virtual functor address into an `Address:Functor`.
   pub fn from_funct_idx(funct_idx: usize) -> Address{
     Address::Functor(funct_idx as AddressType)
   }
@@ -114,7 +114,7 @@ impl Address {
       Address::Code(i) => {
         format!("CODE[{}]", i)
       }
-      Address::Functor(i) => {
+      Address::Functor(_i) => {
         let functor = symbols.get_by_right(self).unwrap();
 
         format!("{}", functor)

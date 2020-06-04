@@ -2,10 +2,11 @@
   This module is responsible for the encoding and decoding of binary instructions.
 
 */
-use std::convert::TryFrom;
 
 use super::{Operation, Instruction};
-use crate::address::AddressType;
+use crate::address::{AddressType, Address};
+use std::convert::TryFrom;
+use crate::functor::Functor;
 
 // If you change this you must also change `encode_instruction` and `decode_instruction`.
 pub type Word = u32;
@@ -23,7 +24,7 @@ pub enum EncodedInstruction{
   DoubleWord(DoubleWord)
 }
 
-/*
+
 pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
   let opcode = match Operation::try_from((bin_inst & 0xFF) as u8) {
     Ok(v) => Some(v),
@@ -34,28 +35,37 @@ pub fn try_decode_instruction(bin_inst: DoubleWord) -> Option<Instruction> {
   }
   let opcode = opcode.unwrap();
 
-  let instruction =
-    if Into::<u8>::into(opcode) < 6 {
-      // [OpCode:8][Address:24][Address:24][Reserved:8]
-      Instruction::Binary {
-        opcode,
-        address1: ((bin_inst >> 8) & 0xFFFFFF) as AddressType,
-        address2: (bin_inst >> 32) as AddressType,
-      }
-    } else if Into::<u8>::into(opcode) < 12 {
-      // [OpCode:8][Address:24]
-      Instruction::Unary {
-        opcode,
-        address: (bin_inst >> 8) as AddressType
-      }
-    } else {
-      // [OpCode:8]
-      Instruction::Nullary(opcode)
-    };
+  let instruction: Instruction;
+  if if Into::<u8>::into(opcode) < 2 {
+    // [OpCode:8][Address:24][Name:16][Arity:16]
+
+    Instruction::BinaryFunctor {
+      opcode,
+      address: Address::from_reg_idx( ((bin_inst >> 8) & 0xFFFFFF) as usize),
+      functor: Functor::from_word((bin_inst >> 32) as Word),
+    }
+  }
+  else if Into::<u8>::into(opcode) < 6 {
+    // [OpCode:8][Address:24][Address:24][Reserved:8]
+    Instruction::Binary {
+      opcode,
+      address1: ((bin_inst >> 8) & 0xFFFFFF) as AddressType,
+      address2: (bin_inst >> 32) as AddressType,
+    }
+  } else if Into::<u8>::into(opcode) < 12 {
+    // [OpCode:8][Address:24]
+    Instruction::Unary {
+      opcode,
+      address: (bin_inst >> 8) as AddressType
+    }
+  } else {
+    // [OpCode:8]
+    Instruction::Nullary(opcode)
+  };
 
   Some(instruction)
 }
-*/
+
 
 
 /**

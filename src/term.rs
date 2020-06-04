@@ -1,5 +1,4 @@
 //! The abstract syntax tree type for programs and queries.
-#![allow(dead_code)]
 
 use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};

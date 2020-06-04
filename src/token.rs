@@ -14,7 +14,6 @@ use std::rc::Rc;
 
 use crate::address::Address;
 use crate::cell::{Cell, CellVec, extract_addresses, RcCell};
-use crate::parser::parse;
 use crate::term::*;
 use crate::functor::Functor;
 
@@ -62,7 +61,7 @@ impl Display for Token{
   semantic meaning. We can't simultaneously compile the term,
   because the flattened form needs to be ordered in a particular way.
 */
-pub fn flatten_term(ast: RcTerm) -> (CellVec, Vec<Address>){
+pub fn flatten_term(ast: &RcTerm) -> (CellVec, Vec<Address>){
   let mut seen: HashMap<RcTerm, Address> = HashMap::new();
 
   // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
@@ -212,25 +211,14 @@ pub struct Tokenizer{
 
 impl Tokenizer{
 
-  /// Convenience function that forwards to `Tokenizer::new()`.
-  pub fn new_program(text: &str) -> Self{
-    Self::new(text, true)
-  }
-  /// Convenience function that forwards to `Tokenizer::new()`.
-  pub fn new_query(text: &str) -> Self{
-    Self::new(text, false)
-  }
-
   /**
     Creates a new `Tokenizer` out of a term in textual form. It tokenizes in the appropriate
     order according to `is_program`. (Program terms must be the reverse of query terms.) It
     assumes that the leading `"?-"` is trimmed from queries.
   */
-  pub fn new(text: &str, is_program: bool) -> Self{
-    // STEP 1: Parse the text into a `Term`, which is a tree structure in general.
-    let ast: RcTerm = parse(text);
+  pub fn new(ast: &RcTerm, is_program: bool) -> Self{
 
-    // STEP 2&3: Flatten and order the terms, converting to `Cell`s in the process.
+    // Flatten and order the terms, converting to `Cell`s in the process.
     let (cell_vec, mut order) = flatten_term(ast);
     // Programs are ordered reverse of queries.
     if is_program {

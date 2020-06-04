@@ -36,6 +36,7 @@ use std::fmt::{Display, Formatter};
 
 use crate::address::{Address};
 pub use binary::{encode_instruction, EncodedInstruction, Word, TwoWords};
+use crate::functor::Functor;
 // pub use assembly::parse_assembly;
 
 /**
@@ -63,6 +64,7 @@ pub enum Operation {
                      // M0 Opcodes //
   PutStructure,      // put_structure( f/n, address )
   GetStructure,      // get_structure( f/n, address)
+  // Opcode 2
 
                      // M1 Opcodes
   PutVariable,       // put_variable( address, address )
@@ -97,6 +99,11 @@ pub enum Operation {
 #[derive(Copy, Clone, Debug)]
 pub enum Instruction {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]
+  BinaryFunctor{
+    opcode   :  Operation,
+    address  :  Address,
+    functor  :  Functor
+  },
   Binary {
     opcode: Operation,
     address1: Address,

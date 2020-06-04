@@ -1,10 +1,9 @@
 //! Structures and functions for the Warren Virtual Machine, what I'm calling an
 //! implementation of Warren's Abstract Machine.
-#![allow(non_snake_case)]
-
 
 use std::collections::{HashSet, HashMap};
 use std::fmt::{Display, Formatter};
+use std::cell::{RefMut, RefCell};
 use std::usize::MAX;
 
 use prettytable::{format as TableFormat, Table};
@@ -15,7 +14,10 @@ use crate::cell::*;
 use crate::token::*;
 use crate::functor::*;
 use crate::bytecode::*;
-use crate::bytecode::{EncodedInstruction};
+use crate::bytecode::EncodedInstruction;
+use crate::parser::parse as parse_source_code;
+
+static SYMBOLS: RefCell<BiMap<Functor, Address>> = RefCell::new(BiMap::new());
 
 #[allow(non_snake_case)]
 pub struct WVM {
@@ -36,8 +38,8 @@ pub struct WVM {
 
   // Symbol table mapping line labels to their address in code memory.
   labels    : HashMap<Functor, Address>,
-  // Symbol table mapping functor symbols `f/n` to a "virtual" address.
-  symbols   : BiMap<Functor, Address>,
+  // Symbol table mapping functor SYMBOLS `f/n` to a "virtual" address.
+  // SYMBOLS   : BiMap<Functor, Address>,
 
   code_buffer : String, // String buffer for emitted code text
 
@@ -103,7 +105,7 @@ impl WVM {
       ip          :  0,
 
       labels      :  HashMap::new(),
-      symbols     :  BiMap::new(),
+      // symbols     :  BiMap::new(),
       code_buffer :  String::new(),
 
       // Computation tracing:
@@ -114,11 +116,12 @@ impl WVM {
 
   /// Gives the virtual address of a `Functor`.
   fn intern_functor(&mut self, functor: &Functor) -> Address{
-    match self.symbols.get_by_left(functor) {
+    let mut symbols = SYMBOLS.borrow_mut();
+    match symbols.get_by_left(functor) {
       Some(address) => *address,
       None => {
-        let address = Address::Functor(self.symbols.len());
-        self.symbols.insert(functor.clone(), address);
+        let address = Address::Functor(symbols.len());
+        symbols.insert(functor.clone(), address);
         address
       }
     }
@@ -222,19 +225,23 @@ impl WVM {
 
   */
   pub fn compile(&mut self, text: &str, to_assembly: bool, interpret: bool){
-    match text.starts_with("?-") {
 
-      true  => {
-        let tokenizer = Tokenizer::new_query(&text[2..]);
-        self.compile_tokens(tokenizer, false,  to_assembly, interpret);
-      }
+    // Parse the text into a `Term`, which is a tree structure in general.
+    let (atoms, queries) = parse_source_code(text);
 
-      false => {
-        let tokenizer = Tokenizer::new_program(text);
-        self.compile_tokens(tokenizer, true, to_assembly, interpret);
-      }
-
+    // Programs
+    for ast in atoms{
+      let tokenizer = Tokenizer::new(&ast, true);
+      self.compile_tokens(tokenizer, true, to_assembly, interpret);
     }
+    // Queries
+    for ast in queries{
+      let tokenizer = Tokenizer::new(&ast, false);
+      self.compile_tokens(tokenizer, false, to_assembly, interpret);
+    }
+
+
+
     #[cfg(feature = "trace_computation")]
       {
         println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
@@ -351,7 +358,7 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::UnifyValue,
-                      address: address
+                      address
                     };
                   self.emit_bytecode(encode_instruction(instruction));
 
@@ -369,7 +376,7 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::SetValue,
-                      address: address
+                      address
                     };
                   self.emit_bytecode(encode_instruction(instruction));
                   if to_assembly {
@@ -394,7 +401,7 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::UnifyVariable,
-                      address: address
+                      address
                     };
                   self.emit_bytecode(encode_instruction(instruction));
 
@@ -412,7 +419,7 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::SetVariable,
-                      address: address
+                      address
                     };
                   self.emit_bytecode(encode_instruction(instruction));
 
@@ -681,15 +688,15 @@ impl WVM {
   }
 
   fn unify(&mut self, a1: Address, a2: Address){
-    let mut PDL: Vec<Address> = Vec::new();
+    let mut pdl: Vec<Address> = Vec::new();
 
-    PDL.push(a1);
-    PDL.push(a2);
+    pdl.push(a1);
+    pdl.push(a2);
     self.fail = false;
-    while !(PDL.is_empty() || self.fail){
-      let b1 = PDL.pop().unwrap();
+    while !(pdl.is_empty() || self.fail){
+      let b1 = pdl.pop().unwrap();
       let b1 = &self.dereference(&b1);
-      let b2 = PDL.pop().unwrap();
+      let b2 = pdl.pop().unwrap();
       let b2 = &self.dereference(&b2);
       let c1 = self.value_at(b1);
       let c2 = self.value_at(b2);
@@ -714,8 +721,8 @@ impl WVM {
               let v1 = self.extract_address(&c1).unwrap();
               let v2 = self.extract_address(&c2).unwrap();
               for n in 1..f1.unwrap().arity{
-                PDL.push(v1 + n as usize);
-                PDL.push(v2 + n as usize);
+                pdl.push(v1 + n as usize);
+                pdl.push(v2 + n as usize);
               }
             } else {
               self.fail = true;

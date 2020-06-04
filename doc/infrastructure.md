@@ -15,7 +15,7 @@ The input syntax is very bare bones. Terms have the following recursively define
 
 Thus, the word *term* refers to any one of the things on this list. *Whitespace* is ignored. It is an error to have two terms adjacent except if separated by a comma as functor arguments. We allow comma-delineated lists of arguments to have a trailing comma without warning. (I wish every programming language allowed this.)
 
-A typical expression in this language looks like `?-p(f(X), h(Y, f(a)), Y)`. This is a query, not a program, because it starts with `?-`. The word functor is borrowed by mathematicians from linguistics. *Functors* are “ words that have little lexical meaning... and express grammatical relationships among other words within a sentence….”[^wiki_functor] They are meaningless symbols in themselves but express relationships between other symbols. This is in contrast to *functions*, which do have meaning in themselves: every college student knows what $\sin(x)$ means.
+A typical expression in this language looks like `?-p(f(X), h(Y, f(a)), Y)`. This is a query, not a program, because it starts with `?-`. The word functor is borrowed by mathematicians from linguistics. *Functors* are “ words that have little lexical meaning... and express grammatical relationships among other words within a sentence….”[^wiki_functor] They are meaningless SYMBOLS in themselves but express relationships between other SYMBOLS. This is in contrast to *functions*, which do have meaning in themselves: every college student knows what $\sin(x)$ means.
 
 ## The abstract symbol tree representation
 
@@ -312,7 +312,7 @@ The first step is to assign each distinct term its own register. Which terms hav
 pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   let mut seen: HashMap<RcTerm, Address> = HashMap::new();
 
-  // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each 
+  // We visit the AST breadth first, adding new SYMBOLS to `seen` as we go. This assigns each 
   // term its own register.
   let terms: TermIter = TermIter::new(&ast);
   for term in terms{
