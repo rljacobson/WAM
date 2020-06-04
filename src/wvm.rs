@@ -3,8 +3,8 @@
 
 use std::collections::{HashSet, HashMap};
 use std::fmt::{Display, Formatter};
-use std::cell::{RefMut, RefCell};
 use std::usize::MAX;
+use std::sync::{Arc, Mutex};
 
 use prettytable::{format as TableFormat, Table};
 use bimap::BiMap;
@@ -17,7 +17,10 @@ use crate::bytecode::*;
 use crate::bytecode::EncodedInstruction;
 use crate::parser::parse as parse_source_code;
 
-static SYMBOLS: RefCell<BiMap<Functor, Address>> = RefCell::new(BiMap::new());
+lazy_static! {
+  pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
+    Arc::new(Mutex::new(BiMap::new()));
+}
 
 #[allow(non_snake_case)]
 pub struct WVM {
@@ -116,7 +119,7 @@ impl WVM {
 
   /// Gives the virtual address of a `Functor`.
   fn intern_functor(&mut self, functor: &Functor) -> Address{
-    let mut symbols = SYMBOLS.borrow_mut();
+    let mut symbols = SYMBOLS.lock().unwrap();
     match symbols.get_by_left(functor) {
       Some(address) => *address,
       None => {
@@ -279,10 +282,10 @@ impl WVM {
 
       #[cfg(feature = "trace_computation")] { self.current_token += 1; }
 
-      match token {
+      match &token {
 
         Token::Assignment(functor, register_address) => {
-          seen.insert(register_address);
+          seen.insert(*register_address);
 
           // The instruction we are about to push onto `self.code`
           // will be the first instruction of `procedure`.
@@ -291,27 +294,20 @@ impl WVM {
           match is_program {
 
             true  => {  // Program
+              self.intern_functor(&functor);
               let instruction =
-                Instruction::Binary {
+                Instruction::BinaryFunctor {
                   opcode: Operation::GetStructure,
-                  address1: self.intern_functor(&functor),
-                  address2: register_address  // Register address
+                  address: *register_address,  // Register address
+                  functor: functor.clone(),
                 };
-              self.emit_bytecode(encode_instruction(instruction));
+              self.emit_bytecode(encode_instruction(&instruction));
 
               if to_assembly {
-                self.code_buffer.push_str(
-                  // Functors are specially formatted
-                  format!(
-                    "{}({}, {})\n",
-                    Operation::GetStructure,
-                    functor,
-                    register_address
-                  ).as_str()
-                );
+                self.emit_assembly(&instruction, &token);
               }
               if interpret{
-                self.get_structure(&functor, &register_address);
+                self.get_structure(functor, &register_address);
               }
             }
 
@@ -320,23 +316,15 @@ impl WVM {
                 Instruction::Binary {
                   opcode: Operation::PutStructure,
                   address1: self.intern_functor(&functor), // Pointer to code
-                  address2: register_address
+                  address2: *register_address
                 };
-              self.emit_bytecode(encode_instruction(instruction));
+              self.emit_bytecode(encode_instruction(&instruction));
 
               if to_assembly {
-                self.code_buffer.push_str(
-                  // Functors are specially formatted
-                  format!(
-                    "{}({}, {})\n",
-                    Operation::PutStructure,
-                    functor,
-                    register_address
-                  ).as_str()
-                );
+                self.emit_assembly(&instruction, &token);
               }
               if interpret{
-                self.put_structure(&functor, &register_address);
+                self.put_structure(&functor, register_address);
               }
             }
 
@@ -358,14 +346,12 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::UnifyValue,
-                      address
+                      address: *address
                     };
-                  self.emit_bytecode(encode_instruction(instruction));
+                  self.emit_bytecode(encode_instruction(&instruction));
 
                   if to_assembly {
-                    self.code_buffer.push_str(
-                      format!("{}\n", instruction).as_str()
-                    );
+                    self.emit_assembly(&instruction, &token);
                   }
                   if interpret{
                     self.unify_value(&address);
@@ -376,13 +362,11 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::SetValue,
-                      address
+                      address: *address
                     };
-                  self.emit_bytecode(encode_instruction(instruction));
+                  self.emit_bytecode(encode_instruction(&instruction));
                   if to_assembly {
-                    self.code_buffer.push_str(
-                      format!("{}\n", instruction).as_str()
-                    );
+                    self.emit_assembly(&instruction, &token);
                   }
                   if interpret{
                     self.set_value(&address);
@@ -394,24 +378,22 @@ impl WVM {
 
             false => {
               // Have not seen this register before.
-              seen.insert(address);
+              seen.insert(*address);
               match is_program {
 
                 true  => {  // Program
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::UnifyVariable,
-                      address
+                      address: *address
                     };
-                  self.emit_bytecode(encode_instruction(instruction));
+                  self.emit_bytecode(encode_instruction(&instruction));
 
                   if to_assembly {
-                    self.code_buffer.push_str(
-                      format!("{}\n", instruction).as_str()
-                    );
+                    self.emit_assembly(&instruction, &token);
                   }
                   if interpret{
-                    self.unify_variable(&address);
+                    self.unify_variable(address);
                   }
                 }
 
@@ -419,14 +401,12 @@ impl WVM {
                   let instruction =
                     Instruction::Unary {
                       opcode: Operation::SetVariable,
-                      address
+                      address: *address
                     };
-                  self.emit_bytecode(encode_instruction(instruction));
+                  self.emit_bytecode(encode_instruction(&instruction));
 
                   if to_assembly {
-                    self.code_buffer.push_str(
-                      format!("{}\n", instruction).as_str()
-                    );
+                    self.emit_assembly(&instruction, &token);
                   }
                   if interpret{
                     self.set_variable(&address);
@@ -447,6 +427,10 @@ impl WVM {
         break;
       };
     } // end iterate over tokens
+  }
+
+  fn emit_assembly(&mut self, instruction: &Instruction, token: &Token){
+    self.code_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), token).as_str());
   }
 
   /// This method only inserts bytes into `self.code`.

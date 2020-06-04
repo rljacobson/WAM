@@ -2,8 +2,9 @@
 //! we no longer have access to its vector of arguments. Thus, a `Functor` is a name and an arity.
 
 use std::fmt::{Formatter, Display};
+
 use string_cache::DefaultAtom;
-use crate::bytecode::Word;
+
 
 pub type ArityType = u32;
 
@@ -17,12 +18,6 @@ pub struct Functor {
   //       time the functor is packaged with its arguments. The problem is,
   //       it's separated from its arguments during tokenization. Does it need
   //       to be?
-}
-
-impl Functor{
-  pub fn from_word(word: Word) -> Functor{
-    DefaultAtom::try_from(word & 0xFFFF)
-  }
 }
 
 impl Display for Functor{

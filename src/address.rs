@@ -4,9 +4,10 @@
 use std::ops::Add;
 use std::fmt::{Display, Formatter};
 
-use crate::bytecode::Word;
-use crate::functor::Functor;
 use bimap::BiMap;
+
+use crate::bytecode::DoubleWord;
+use crate::functor::Functor;
 
 // `AddressType` is `usize`, as it is naturally an index into a memory store.
 pub type AddressType = usize;
@@ -36,8 +37,8 @@ impl Address {
   }
 
   /// Encodes the address into the bits as they appear in bytecode.
-  pub fn enc(&self) -> Word {
-    self.idx() as Word
+  pub fn enc(&self) -> DoubleWord {
+    self.idx() as DoubleWord
   }
 
   /// Converts an index into the heap vector to a heap address.
