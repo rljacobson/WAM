@@ -3,11 +3,11 @@
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::usize::MAX;
 use std::sync::{Arc, Mutex};
 
 use prettytable::{format as TableFormat, Table};
 use bimap::BiMap;
+use string_cache::DefaultAtom;
 
 use crate::address::*;
 use crate::cell::*;
@@ -15,10 +15,14 @@ use crate::token::*;
 use crate::functor::*;
 use crate::bytecode::*;
 use crate::parser::parse as parse_source_code;
+use crate::term::{Term, TermVec};
+use std::rc::Rc;
 
 lazy_static! {
   /**
-    This symbol table keeps track of the names of functors that have been compiled to bytecode
+    This symbol table keeps track of the names of functors that have been compiled to bytecode so
+    that the names can be reconstituted for the human reader. Otherwise, functors would have
+    auto-generated names. An alternative is to serialize the names to bytecode.
   */
   pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
     Arc::new(Mutex::new(BiMap::new()));
@@ -48,26 +52,50 @@ pub struct WVM {
   // SYMBOLS   : BiMap<Functor, Address>,
 
   assembly_buffer: String, // String buffer for emitted code text
-
-  // For tracing computations :
-  #[cfg(feature = "trace_computation")] token_stack   :  Vec<Token>,
-  #[cfg(feature = "trace_computation")] current_token :  usize
-
 }
 
 impl WVM {
 
   // region Display methods
 
-  fn print_result(&self) {
-    if !self.fail {
-      /*
-        Attempt to construct:
-          1. the substitutions, and
-          2. the resulting expression.
+  /**
+    Gives the possibly intermediate results of unification for the query living at `X[1]`.
+  */
+  fn memory_to_term(&self, address: &Address) -> Term{
 
-        The second can be recovered from the registers. The first can be tracked in `unify*`.
-      */
+    let data_address = self.dereference(address);
+    let cell = self.value_at(&data_address);
+    match cell {
+
+      | Cell::Functor(_)
+      | Cell::STR(_) => {
+        let functor_address = match self.extract_address(&cell) {
+          Some(add) => add,
+          None => data_address
+        };
+        let functor = self.extract_functor(&data_address).unwrap();
+        let mut args = TermVec::with_capacity((functor.arity) as usize);
+        for i in 1..functor.arity + 1 {
+          // It is possible that not all arguments have been constructed yet.
+          if !((functor_address + i as usize).idx() < self.heap.len()) { break; }
+          args.push(Rc::new(self.memory_to_term(&(functor_address + i as usize))));
+        }
+
+        Term::Structure {
+          functor,
+          args
+        }
+      }
+
+      Cell::REF(var_address) if var_address == data_address => {
+        // A variable
+        Term::Variable(DefaultAtom::from(format!("V{}", var_address.idx())))
+      }
+
+      _ => {
+        eprintln!("Error: Could not construct a term from the cell at {}", data_address);
+        Term::Empty
+      }
 
     }
   }
@@ -125,12 +153,7 @@ impl WVM {
       ip          :  0,
 
       labels      :  Vec::new(),
-      // symbols     :  BiMap::new(),
       assembly_buffer:  String::new(),
-
-      // Computation tracing:
-      #[cfg(feature = "trace_computation")] token_stack   : vec![],
-      #[cfg(feature = "trace_computation")] current_token : MAX,
     }
   }
 
@@ -198,6 +221,14 @@ impl WVM {
       }
 
     }
+  }
+
+  pub fn dump_assembly(&self) -> &str {
+    self.assembly_buffer.as_str()
+  }
+
+  pub fn dump_bytecode(&self) -> &[u32]{
+    self.code.as_slice()
   }
 
   // endregion
@@ -274,19 +305,11 @@ impl WVM {
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
 
-    #[cfg(feature = "trace_computation")]
-      {
-        let tokenizer_copy = tokenizer.clone();
-        self.token_stack = tokenizer_copy.collect();
-        self.current_token = 0;
-      }
-
     // Flag the first token.
     let mut outermost = true;
 
     // We iterate over the tokens in the registers in `order`.
     for token in tokenizer {
-      #[cfg(feature = "trace_computation")] { self.current_token += 1; }
 
       // Book keeping for the outermost term, which defines the procedure/query
       if outermost {
@@ -469,9 +492,12 @@ impl WVM {
   fn dereference(& self, ptr: &Address) -> Address{
     let cell = self.value_at(ptr);
     match cell{
+
       // Do not dereference variables, which reference themselves.
       Cell::REF(a) if a != *ptr => self.dereference(&a),
+
       _                         => *ptr,
+
     }
   }
 
@@ -817,7 +843,7 @@ impl WVM {
     as possible. But we don't care about speed. In fact, it's already really fast. Don't
     micro-optimise.
   */
-  pub fn run(&mut self){
+  fn run(&mut self){
 
     #[cfg(feature = "trace_computation")] {
       println!("Labels:");
@@ -857,6 +883,10 @@ impl WVM {
         };
 
         let instruction: Instruction = match try_decode_instruction(&encoded) {
+          Some(Instruction::Nullary(Operation::Proceed)) => {
+            // End of procedure, stop executing instructions linearly.
+            break;
+          },
           Some(i) => i,
           None => {
             eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
@@ -874,19 +904,19 @@ impl WVM {
           break;
         }
 
-        // ToDo: This line prints the vm state twice at the end of a procedure because of `Proceed`.
         #[cfg(feature = "trace_computation")] println!("{}", self);
       } // end loop over instructions in procedure
 
       // M_1 only finds at most one success, as there is at most one fact for a given head.
       if !self.fail && self.query == false {
+
+        let term = self.memory_to_term(&Address::Register(1));
+        #[cfg(not(feature = "trace_computation"))]
+        println!("{}\n", term.as_expression_string());
         println!("TRUE");
         break;
       }
     } // 'outer: finished iterating over procedures
-
-    #[cfg(feature = "trace_computation")]
-    self.print_result();
 
     if self.fail {
       println!("FALSE");
@@ -960,33 +990,12 @@ lazy_static! {
         TableFormat::LinePosition::Title,
         TableFormat::LineSeparator::new('─', '┼', ' ', ' ')
       )
-      .separator(
-        TableFormat::LinePosition::Bottom,
-        TableFormat::LineSeparator::new('─', '┴', ' ', ' ')
-      )
       .padding(1, 1)
       .build();
 }
 
 impl Display for WVM {
 
-  // We print the token_stack if `trace_computation` is on.
-  #[cfg(feature = "trace_computation")]
-  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table     = WVM::make_register_table("HEAP", &self.heap,self.hp, 0);
-    let x_table     = WVM::make_register_table("X", &self.registers, self.rp, 1);
-    let token_table = WVM::make_register_table("TS", &self.token_stack,
-                                               self.current_token - 1, 1);
-
-    let mut combined_table = table!([h_table, x_table, token_table]);
-
-    combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
-    combined_table.set_format(*TABLE_DISPLAY_FORMAT);
-
-    write!(f, "Mode: {}\n{}", self.mode, combined_table)
-  }
-
-  #[cfg(not(feature = "trace_computation"))]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     let h_table = WVM::make_register_table("HEAP", &self.heap,
                                            self.hp, 0);
@@ -999,7 +1008,24 @@ impl Display for WVM {
     combined_table.set_titles(row![ub->"Heap", ub->"Registers"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    write!(f, "Mode: {}\n{}", self.mode, combined_table)
+    /*
+      Attempt to construct:
+        1. the substitutions, and
+        2. the resulting expression.
+
+      The second can be recovered from the X[1] register. For the first, it's just a matter of
+      recording which variable names went with which heap addresses. Unfortunately, we throw
+      away that information during flattening of the term, but the idea is easy in principle.
+      We will save that feature for a future machine.
+    */
+    if self.registers.is_empty() ||
+      (self.value_at(&Address::Register(1)) == Cell::Empty)
+    {
+      write!(f, "{}", combined_table)
+    } else {
+      let term = self.memory_to_term(&Address::Register(1));
+      write!(f, "{}\n{}\n", combined_table, term.as_expression_string())
+    }
   }
 }
 

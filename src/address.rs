@@ -104,25 +104,6 @@ impl Address {
     }
   }
 
-  pub fn stringify(&self, symbols: BiMap<Functor, Address>) -> String {
-    match self {
-      Address::Heap(i) => {
-        format!("HEAP[{}]", i)
-      }
-      Address::Register(i) => {
-        format!("X[{}]", i)
-      }
-      Address::Code(i) => {
-        format!("CODE[{}]", i)
-      }
-      Address::Functor(_i) => {
-        let functor = symbols.get_by_right(self).unwrap();
-
-        format!("{}", functor)
-      }
-    }
-  }
-
 }
 
 

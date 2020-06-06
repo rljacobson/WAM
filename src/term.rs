@@ -40,6 +40,31 @@ impl Display for Term{
 
 impl Term{
 
+  pub fn as_expression_string(&self) -> String{
+    match self {
+
+      Term::Structure{ functor, args } => {
+        if args.is_empty() {
+          format!("{}", functor.name)
+        }else {
+          let mut buffer = format!("{}(", functor.name);
+          for (i, term) in args.iter().enumerate(){
+            buffer.push_str(term.as_expression_string().as_str());
+            if i != args.len() - 1 {
+              buffer.push_str(", ");
+            }
+          }
+          buffer.push(')');
+          buffer
+        }
+      }
+
+      Term::Variable(name) => name.to_string(),
+
+      _ => "??".to_string()
+    }
+  }
+
   fn fmt_aux(&self, prefix: &str, child_prefix: &str) -> String {
     match self {
       Term::Structure{ functor, args } => {

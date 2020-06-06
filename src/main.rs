@@ -26,10 +26,16 @@ fn main() {
   #[cfg(feature = "trace_computation")]
   println!("Computation Tracing ENABLED");
 
-  let text = "?-p(Z,h(Z,W),f(W))\n
-  \tj(f(Y), r(X), f(P, Q))\n
-  \tp(f(Y), r(X), f(P, Q))\n
-  \tp(f(X), h(Y, f(a)), Y)\n";
+  /*
+    It is important that in M_1 no two facts have the same head atom. Otherwise, the failure of
+    the first version of the atom will have changed the registers because of its partial
+    unification, and the matching program will not be matching against the original query but
+    rather a query partially unified with some other program.
+  */
+  let text = "?-p(Z,h(Z,W),f(W))
+  \tj(f(Y), r(X), f(P, Q))
+  \ty(f(Y), r(X), f(P, Q))
+  \tp(f(X), h(Y, f(a)), Y)";
   println!("Input Expression: \n\t{}", text);
 
   let mut machine = WVM::new();

@@ -199,13 +199,7 @@ pub fn order_registers(flat_terms: CellVec) -> Vec<Address>{
 pub struct Tokenizer{
   outer_index: usize,
   inner_index: usize,
-  #[cfg(feature = "trace_computation")]
-  pub cell_vec: CellVec,
-  #[cfg(not(feature = "trace_computation"))]
   cell_vec: CellVec,
-  #[cfg(feature = "trace_computation")]
-  pub order: Vec<Address>,
-  #[cfg(not(feature = "trace_computation"))]
   order: Vec<Address>,
 }
 
