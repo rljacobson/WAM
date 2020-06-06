@@ -10,12 +10,12 @@ use string_cache::DefaultAtom;
 use crate::address::Address;
 use crate::functor::{Functor, ArityType};
 use super::{Operation, Instruction};
-use crate::wvm::SYMBOLS; // ToDo: This dependency is frustrating.
+// ToDo: This dependency is frustrating. Can it be removed?
+use crate::wvm::{intern_functor, try_get_interned_functor};
 use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_BINARY_OPCODE, MAX_FUNCTOR_OPCODE};
 
 // If you change this you must also change `encode_instruction` and `decode_instruction`.
 pub type Word = u32;
-pub type DoubleWord = u64;
 
 /*
   Convenience for decomposing a DoubleWord into a high word and a low word. In fact, the
@@ -102,7 +102,7 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
       EncodedInstruction::DoubleWord(
         TwoWords {
           low: (Into::<u8>::into(*opcode) as Word) + (address.enc() << 8),
-          high: (encode_functor(&functor) << 32),
+          high: encode_functor(&functor),
         }
       )
     }
@@ -114,7 +114,7 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
       EncodedInstruction::DoubleWord(
         TwoWords {
           low: (Into::<u8>::into(*opcode) as Word) + (add1 << 8),
-          high: add2 << 32,
+          high: add2,
         }
       )
     },
@@ -156,39 +156,30 @@ pub fn is_double_word_instruction(word: &Word) -> bool{
 
 pub fn decode_functor(word: &Word) -> Functor{
   let functor_address = Address::from_funct_idx((word & 0xFFFF) as usize);
-  let mut symbols = SYMBOLS.lock().unwrap();
 
-  match symbols.get_by_right(&functor_address) {
+  match try_get_interned_functor(&functor_address) {
+
     Some(functor) => functor.clone(),
 
     None => {
-      // ToDo: Make a more robust automatic naming scheme. ASCII 97 = 'a'.
-      let new_name = DefaultAtom::from(((97u8 + symbols.len() as u8) as char).to_string());
+      // ToDo: Make a more robust automatic naming scheme.
+      // ASCII 97 = 'a'.
+      let new_name = DefaultAtom::from(
+        ((97u8 + functor_address.idx() as u8) as char).to_string()
+      );
       let functor = Functor {
         name: new_name,
         arity: (word >> 16) as ArityType
       };
-      symbols.insert(functor.clone(), functor_address);
+      intern_functor(&functor);
       functor
     }
+
   }
-
-
 }
 
 pub fn encode_functor(functor: &Functor) -> Word{
-  let mut symbols = SYMBOLS.lock().unwrap();
-  let functor_idx = match symbols.get_by_left(functor) {
+  let functor_address = intern_functor(functor);
 
-    Some(address) => address.idx(),
-
-    None => {
-      let address = Address::from_funct_idx(symbols.len());
-      symbols.insert(functor.clone(), address);
-      address.idx()
-    }
-
-  };
-
-  ((functor.arity as Word) << 16) + (functor_idx as Word)
+  ((functor.arity as Word) << 16) + (functor_address.idx() as Word)
 }

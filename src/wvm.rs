@@ -1,7 +1,7 @@
 //! Structures and functions for the Warren Virtual Machine, what I'm calling an
 //! implementation of Warren's Abstract Machine.
 
-use std::collections::{HashSet, HashMap};
+use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
 use std::usize::MAX;
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,9 @@ use crate::bytecode::*;
 use crate::parser::parse as parse_source_code;
 
 lazy_static! {
+  /**
+    This symbol table keeps track of the names of functors that have been compiled to bytecode
+  */
   pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
     Arc::new(Mutex::new(BiMap::new()));
 }
@@ -25,8 +28,9 @@ lazy_static! {
 pub struct WVM {
 
   // Flags
-  fail: bool, // Indication of unification failure
-  mode: Mode, // Read or Write mode
+  fail  : bool, // Indication of unification failure
+  query : bool, // True if we're running query code, false otherwise.
+  mode  : Mode, // In Write mode, new elements are built on the heap.
 
   // Memory Stores
   heap: Vec<Cell>, // The "global stack," a memory store
@@ -39,11 +43,11 @@ pub struct WVM {
   registers : Vec<Cell>, // Term registers
 
   // Symbol table mapping line labels to their address in code memory.
-  labels    : HashMap<Functor, Address>,
+  labels    : Vec<(Functor, Address)>,
   // Symbol table mapping functor SYMBOLS `f/n` to a "virtual" address.
   // SYMBOLS   : BiMap<Functor, Address>,
 
-  code_buffer : String, // String buffer for emitted code text
+  assembly_buffer: String, // String buffer for emitted code text
 
   // For tracing computations :
   #[cfg(feature = "trace_computation")] token_stack   :  Vec<Token>,
@@ -55,8 +59,21 @@ impl WVM {
 
   // region Display methods
 
+  fn print_result(&self) {
+    if !self.fail {
+      /*
+        Attempt to construct:
+          1. the substitutions, and
+          2. the resulting expression.
+
+        The second can be recovered from the registers. The first can be tracked in `unify*`.
+      */
+
+    }
+  }
+
   fn make_register_table<T> (
-      name      : char,
+      name      : &str,
       registers : &[T],
       highlight : usize,
       start     : usize
@@ -96,7 +113,8 @@ impl WVM {
   pub fn new() -> WVM {
     WVM {
       fail        :  false,
-      mode        :  Mode::Read, // Arbitrary value
+      query       :  true,
+      mode        :  Mode::Read, // Arbitrarily chosen.
 
       heap        :  vec![],
       code        :  vec![],
@@ -106,26 +124,13 @@ impl WVM {
       rp          :  0,
       ip          :  0,
 
-      labels      :  HashMap::new(),
+      labels      :  Vec::new(),
       // symbols     :  BiMap::new(),
-      code_buffer :  String::new(),
+      assembly_buffer:  String::new(),
 
       // Computation tracing:
       #[cfg(feature = "trace_computation")] token_stack   : vec![],
       #[cfg(feature = "trace_computation")] current_token : MAX,
-    }
-  }
-
-  /// Gives the virtual address of a `Functor`.
-  fn intern_functor(&mut self, functor: &Functor) -> Address{
-    let mut symbols = SYMBOLS.lock().unwrap();
-    match symbols.get_by_left(functor) {
-      Some(address) => *address,
-      None => {
-        let address = Address::Functor(symbols.len());
-        symbols.insert(functor.clone(), address);
-        address
-      }
     }
   }
 
@@ -154,7 +159,7 @@ impl WVM {
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
-      Address::Heap(_) => self.heap     [ptr.idx()].clone(),
+      Address::Heap(_) => self.heap[ptr.idx()].clone(),
       Address::Register(_) => self.registers[ptr.idx()].clone(),
       | Address::Functor(_)
       | Address::Code(_) => {
@@ -200,8 +205,9 @@ impl WVM {
   // region Compilation/Interpretation
 
   /**
-    Accepts a program or query as a string and turns it into
-    a sequences of operations or an in-memory representation.
+
+    Accepts a program and/or query as a string and turns it into a sequence
+    of operations, an in-memory representation, and/or assembly source code.
 
     The compilation pipeline is this:
     ```
@@ -215,85 +221,104 @@ impl WVM {
 
     ⋯-> [`unify`] -> Success/Fail
     ```
-    The [`unify`] step is part of `compile_tokens` and interprets the
-    instructions to build the in-memory `Cell`s. The conversion to
-    `Cell`s, then `Token`s, and back to `Cell`s again is for two reasons:
+    The [`unify`] step executes the instructions to build the in-memory `Cell`s. The
+    conversion to `Cell`s, then `Token`s, and back to `Cell`s again is for two reasons:
 
      1. Because the term needs to be flattened and reordered, we would
         have the "conversion" step no matter what.
 
-     2. Conversion from AST to `Cell`s allows us to
-        build in-memory representations directly "by hand."
+     2. Conversion from AST to `Cell`s allows us to build in-memory
+        representations directly "by hand" should we so desire.
 
   */
-  pub fn compile(&mut self, text: &str, to_assembly: bool, interpret: bool){
+  pub fn compile(&mut self, text: &str, to_assembly: bool, execute: bool){
 
     // Parse the text into a `Term`, which is a tree structure in general.
     let (atoms, queries) = parse_source_code(text);
 
-    // Programs
-    for ast in atoms{
-      let tokenizer = Tokenizer::new(&ast, true);
-      self.compile_tokens(tokenizer, true, to_assembly, interpret);
-    }
     // Queries
     for ast in queries{
       let tokenizer = Tokenizer::new(&ast, false);
-      self.compile_tokens(tokenizer, false, to_assembly, interpret);
+      self.compile_tokens(tokenizer, false, to_assembly);
     }
-
-
+    // Programs
+    for ast in atoms{
+      let tokenizer = Tokenizer::new(&ast, true);
+      self.compile_tokens(tokenizer, true, to_assembly);
+    }
 
     #[cfg(feature = "trace_computation")]
       {
         println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
         if to_assembly {
-          println!("# Compiled Code Instructions\n{}", self.code_buffer);
+          println!("% Assembly Code Instructions\n{}", self.assembly_buffer);
         }
       }
+
+    if execute {
+      self.run();
+    }
   }
 
   /**
-    Compiles a flattened query term into its in-memory representation.
+    Compiles a single  query or procedure by compiling the
+    provided flattened term into its in-memory representation.
 
     This function assumes that the term has been prepared with `flatten_term`.
   */
   fn compile_tokens(
     &mut self, tokenizer: Tokenizer,
     is_program: bool,
-    to_assembly: bool,
-    interpret: bool
+    to_assembly: bool
   ){
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
 
     #[cfg(feature = "trace_computation")]
       {
-        let stream_copy = tokenizer.clone();
-        self.token_stack = stream_copy.collect();
-        self.current_token = 1;
-        println!("{}", self);
+        let tokenizer_copy = tokenizer.clone();
+        self.token_stack = tokenizer_copy.collect();
         self.current_token = 0;
       }
 
+    // Flag the first token.
+    let mut outermost = true;
+
     // We iterate over the tokens in the registers in `order`.
     for token in tokenizer {
-
       #[cfg(feature = "trace_computation")] { self.current_token += 1; }
+
+      // Book keeping for the outermost term, which defines the procedure/query
+      if outermost {
+        // The instruction we are about to push onto `self.code` will
+        // be the first instruction of `procedure`. No checking is
+        // done to see if there already is a procedure with this name.
+        let procedure_address = Address::Code(self.code.len() as AddressNumberType);
+        // The first token MUST be a Token::Assignment in M_1, but the compiler doesn't know that.
+        if let Token::Assignment(functor, _address) = &token{
+          self.labels.push((functor.clone(), procedure_address));
+        }
+
+        if to_assembly {
+          match is_program{
+            true  => self.assembly_buffer.push_str(format!("% Procedure {}\n", &token).as_str()),
+            false => self.assembly_buffer.push_str(format!("% Query\n").as_str()),
+          }
+        }
+        outermost = false;
+      }
 
       match &token {
 
         Token::Assignment(functor, register_address) => {
           seen.insert(*register_address);
 
-          // The instruction we are about to push onto `self.code`
-          // will be the first instruction of `procedure`.
-          let procedure_address = self.code.len() as AddressNumberType;
-          self.labels.insert(functor.clone(), Address::Code(procedure_address));
           match is_program {
 
             true  => {  // Program
-              self.intern_functor(&functor);
+
+              // Record functor so its name can be reconstituted from bytecode.
+              intern_functor(&functor);
               let instruction =
                 Instruction::BinaryFunctor {
                   opcode: Operation::GetStructure,
@@ -305,36 +330,28 @@ impl WVM {
               if to_assembly {
                 self.emit_assembly(&instruction, &token);
               }
-              if interpret{
-                self.get_structure(functor, &register_address);
-              }
             }
 
             false => { // Query
+
               let instruction =
-                Instruction::Binary {
+                Instruction::BinaryFunctor {
                   opcode: Operation::PutStructure,
-                  address1: self.intern_functor(&functor), // Pointer to code
-                  address2: *register_address
+                  address: *register_address,
+                  functor: functor.clone()
                 };
               self.emit_bytecode(encode_instruction(&instruction));
 
               if to_assembly {
                 self.emit_assembly(&instruction, &token);
               }
-              if interpret{
-                self.put_structure(&functor, register_address);
-              }
             }
 
           } // end match is_program
-
-          // Update the register pointer
-          self.rp = register_address.idx();
-
         } // end is assignment
 
         Token::Register(address) => {
+
           match seen.contains(&address) {
 
             true  => {
@@ -352,9 +369,6 @@ impl WVM {
                   if to_assembly {
                     self.emit_assembly(&instruction, &token);
                   }
-                  if interpret{
-                    self.unify_value(&address);
-                  }
                 }
 
                 false => { // Query
@@ -366,9 +380,6 @@ impl WVM {
                   self.emit_bytecode(encode_instruction(&instruction));
                   if to_assembly {
                     self.emit_assembly(&instruction, &token);
-                  }
-                  if interpret{
-                    self.set_value(&address);
                   }
                 }
 
@@ -391,9 +402,6 @@ impl WVM {
                   if to_assembly {
                     self.emit_assembly(&instruction, &token);
                   }
-                  if interpret{
-                    self.unify_variable(address);
-                  }
                 }
 
                 false => { // Query
@@ -407,29 +415,30 @@ impl WVM {
                   if to_assembly {
                     self.emit_assembly(&instruction, &token);
                   }
-                  if interpret{
-                    self.set_variable(&address);
-                  }
                 }
 
               } // end match is_program
             }
-
           } // end if seen address before
-
         }
       } // end match on token type
 
-      #[cfg(feature = "trace_computation")] println!("{}", self);
-
-      if self.fail {
-        break;
-      };
     } // end iterate over tokens
+
+    // For now, we end query construction with a `Proceed` as well.
+    let instruction = Instruction::Nullary(Operation::Proceed);
+    self.emit_bytecode(encode_instruction(&instruction));
+    if to_assembly {
+      self.assembly_buffer.push_str(format!(
+        "{:30}%   End of atom\n",
+        format!("{}", instruction)
+      ).as_str());
+    }
+
   }
 
   fn emit_assembly(&mut self, instruction: &Instruction, token: &Token){
-    self.code_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), token).as_str());
+    self.assembly_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), token).as_str());
   }
 
   /// This method only inserts bytes into `self.code`.
@@ -522,14 +531,14 @@ impl WVM {
     Note: `structure` is not statically checked to be a `Cell:Structure`.
           Callers must ensure this contract is maintained on their own.
   */
-  fn put_structure(& mut self, functor: &Functor, reg_ptr: &Address) {
-    reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")] println!("PutStructure({}, {})", functor, reg_ptr);
+  fn put_structure(& mut self, functor: &Functor, address: &Address) {
+    address.require_register();
+    #[cfg(feature = "trace_computation")] println!("PutStructure({}, {})", functor, address);
 
     let cell = Cell::STR(Address::from_heap_idx(self.heap.len() + 1));
     self.heap.push(cell.clone());
     self.heap.push(Cell::Functor(functor.clone()));
-    self.set_value_at(reg_ptr, &cell);
+    self.set_value_at(address, &cell);
   }
 
   /**
@@ -568,11 +577,13 @@ impl WVM {
 
     Note: `register_address` must be a pointer to a register, but this contract is not statically checked.
   */
-  fn get_structure(&mut self, functor: &Functor, register_address: &Address){
-    register_address.require_register();
+  fn get_structure(&mut self, functor: &Functor, address: &Address){
+    address.require_register();
 
-    let target_address = self.dereference(register_address);
-    let target_cell = self.value_at(&target_address);
+    self.mode = Mode::Read;
+
+    let target_address = self.dereference(address);
+    let target_cell    = self.value_at(&target_address);
 
     match target_cell {
 
@@ -580,29 +591,31 @@ impl WVM {
         // A variable. Create a new functor structure for `functor` on the stack, bind the
         // variable to the functor, and set `mode` to `Mode::Write`.
         #[cfg(feature = "trace_computation")]
-          println!("GetStructure({}, {}): creating struct", functor, register_address);
+          println!("GetStructure({}, {}): creating struct", functor, address);
 
-        let functor_address = Address::from_heap_idx(self.heap.len() + 1);
-        let cell      = Cell::STR(functor_address);
-        self.mode     = Mode::Write;
+        let functor_idx = self.heap.len() + 1;
+        let functor_address = Address::from_heap_idx(functor_idx);
+        let cell            = Cell::STR(functor_address);
+        self.mode           = Mode::Write;
 
         self.heap.push(cell);
         self.heap.push(Cell::Functor(functor.clone()));
-        self.bind(&target_address, &functor_address);
+        // Remember that we want to bind to the `STR`, not the `f/n`, so subtract 1..
+        self.bind(&target_address, &Address::from_heap_idx(functor_idx - 1));
       },
 
       Cell::STR(heap_address @ Address::Heap(_)) => {
         // A pointer to a functor.
         if self.heap[heap_address.idx()] == Cell::Functor(functor.clone()) {
           #[cfg(feature = "trace_computation")]
-            println!("GetStructure({}, {}): functor already on stack", functor, register_address);
+            println!("GetStructure({}, {}): functor already on stack", functor, address);
 
           self.hp   = heap_address.idx() + 1;
           self.mode = Mode::Read;
 
         } else{
           #[cfg(feature = "trace_computation")]
-            println!("GetStructure({}, {}) - STR points to different functor", functor, register_address);
+            println!("GetStructure({}, {}) - STR points to different functor", functor, address);
           self.fail = true;
         }
       }
@@ -611,7 +624,7 @@ impl WVM {
         // This is an error condition that should not happen in correct programs.
         #[cfg(feature = "trace_computation")]
           println!("GetStructure({}, {}) - neither REF nor STR found: {}",
-                   functor, register_address, _c);
+                   functor, address, _c);
         self.fail = true;
       }
     };
@@ -623,22 +636,22 @@ impl WVM {
 
     Note: `ptr` must be a register pointer, but this contract is not statically checked.
   */
-  fn unify_variable(&mut self, register_address: &Address){
-    register_address.require_register();
+  fn unify_variable(&mut self, address: &Address){
+    address.require_register();
 
     match self.mode {
 
       Mode::Read  => {
         #[cfg(feature = "trace_computation")]
-          println!("UnifyVariable({}):  {} <- H[S={}]", register_address, register_address, self.hp);
-        // ToDo: Extra copy here:
-        let value = &self.heap[self.hp].clone();
-        self.set_value_at(register_address, value);
+          println!("UnifyVariable({}):  {} <- H[S={}]", address, address, self.hp);
+
+        let value = self.heap[self.hp].clone();
+        self.set_value_at(address, &value);
       }
 
       Mode::Write => {
-        #[cfg(feature = "trace_computation")] print!("UnifyVariable({}):  ", register_address);
-        self.set_variable(register_address)
+        #[cfg(feature = "trace_computation")] print!("UnifyVariable({}):  ", address);
+        self.set_variable(address)
       }
 
     } // end match mode
@@ -649,32 +662,33 @@ impl WVM {
   /**
     Either pushes the value of `X[i]` onto the `HEAP` (write) or unifies `X[i]` and the cell at `S`.
 
-    Note: `reg_ptr` must be a register pointer, but this contract is not statically checked.
+    Note: `address` must be a register pointer, but this contract is not statically checked.
   */
-  fn unify_value(&mut self, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn unify_value(&mut self, address: &Address){
+    address.require_register();
 
     match self.mode {
 
       Mode::Read  => {
-        #[cfg(feature = "trace_computation")] println!("UnifyValue({}):  unifying", reg_ptr);
-        self.unify(*reg_ptr, Address::from_heap_idx(self.hp));
+        #[cfg(feature = "trace_computation")] println!("UnifyValue({}):  unifying", address);
+        self.unify(address, &Address::from_heap_idx(self.hp));
       }
 
       Mode::Write => {
-        #[cfg(feature = "trace_computation")] print!("UnifyValue({}):  ", reg_ptr);
-        self.set_value(reg_ptr);
+        #[cfg(feature = "trace_computation")] print!("UnifyValue({}):  ", address);
+        self.set_value(address);
       }
     }
 
     self.hp += 1;
   }
 
-  fn unify(&mut self, a1: Address, a2: Address){
+  fn unify(&mut self, a1: &Address, a2: &Address){
+    // In [Warren] the PDL (push down list) is global.
     let mut pdl: Vec<Address> = Vec::new();
 
-    pdl.push(a1);
-    pdl.push(a2);
+    pdl.push(a1.clone());
+    pdl.push(a2.clone());
     self.fail = false;
     while !(pdl.is_empty() || self.fail){
       let b1 = pdl.pop().unwrap();
@@ -720,24 +734,63 @@ impl WVM {
 
   // M_1 Operations
 
+  /**
+    put_variable Xn, Ai
+
+      "The first occurrence of a variable in i-th argument position pushes a new unbound REF cell
+      onto the heap and copies it into that variable’s register as well as argument register Ai."
+  */
   fn put_variable(&mut self, address1: &Address, address2: &Address){
+    address1.require_register();
+    address2.require_register();
+    #[cfg(feature = "trace_computation")] println!("PutVariable({}, {})", address1, address2);
 
+    let cell = Cell::REF(Address::Heap(self.heap.len()));
+    self.set_value_at(address1, &cell);
+    self.set_value_at(address2, &cell);
+    self.heap.push(cell);
   }
 
+  /**
+    get_variable Xn, Ai
+
+      "Sets the argument in the Xn position to the value of argument register Ai."
+  */
   fn get_variable(&mut self, address1: &Address, address2: &Address){
+    address1.require_register();
+    address2.require_register();
+    #[cfg(feature = "trace_computation")] println!("GetVariable({}, {})", address1, address2);
 
+    self.set_value_at(address1, &self.value_at(address2));
   }
 
+  /**
+    put_value Xn Ai
+
+    "A later occurrence copies its value into argument register Ai."
+  */
   fn put_value(&mut self, address1: &Address, address2: &Address){
+    address1.require_register();
+    address2.require_register();
+    #[cfg(feature = "trace_computation")] println!("PutValue({}, {})", address1, address2);
 
+    self.set_value_at(address2, &self.value_at(address1));
   }
 
-  fn get_value(&mut self, address1: &Address, address2: &Address){
+  /**
+    get_value Xn, Ai
 
+    Unifies Xn with Ai.
+  */
+  fn get_value(&mut self, address1: &Address, address2: &Address){
+    self.unify(address1, address2);
   }
 
   /// A function call to the function with entry point `address`.
   fn call(&mut self, address: &Address) {
+    address.require_code();
+    #[cfg(feature = "trace_computation")] println!("Call({})", address);
+
     self.ip = address.idx();
   }
 
@@ -746,28 +799,51 @@ impl WVM {
   // region VM control methods
 
   /**
-    Begin executing of the bytecode starting at code address `address`. The instruction pointer
-    `ip` is set to `address`, and the `fail` flag is set to `false` before execution begins.
-    Otherwise, the caller is responsible for setting/resetting the vm registers and memory stores.
+    Begin execution of the bytecode starting at code address 0. The instruction pointer
+    `ip` is reset, and the `fail` flag is set to `false` before execution begins. Otherwise,
+    the caller is responsible for setting/resetting the vm registers and memory stores.
+
+    In M_1, every fact is labeled with a functor and has a code address at which the code
+    associated with the fact begins. These labeled procedures, as we'll call them, are
+    stored in the WVM::Labels array in the order in which they were compiled, with the
+    query appearing first. Then `run` iterates over each label, calling them in turn.
+    `Proceed` signals end of procedure, reporting success/failure. Upon failure, `ip` is
+    set to the next label. We also bail out of a procedure early if we fail partway through.
+
+    The `Proceed` instruction is just for show in M_1, as the bytecode could just as easily run
+    linearly. The `Call` instruction is also just for show. It is functional but never used.
 
     If we cared about speed, we would optimize this function and the functions it calls as much
-    as possible. But we don't care about speed.
+    as possible. But we don't care about speed. In fact, it's already really fast. Don't
+    micro-optimise.
   */
-  fn run(&mut self, address: &Address){
-    address.require_code();
+  pub fn run(&mut self){
 
-    self.ip = address.idx();
-    self.fail = false;
+    #[cfg(feature = "trace_computation")] {
+      println!("Labels:");
+      for (f, a) in self.labels.iter(){
+        println!("\t{} -> {}", f, a);
+      }
+      println!();
+    }
 
-    let mut words = TwoWords{low:0, high:0 };
-    while self.ip < self.code.len() {
-      // Instructions increment `ip` themselves.
-      words.low = self.code[self.ip];
+    let labels = self.labels.clone();
+    for (k, (_functor, address)) in labels.iter().enumerate() {
+      self.ip   = address.idx();
+      self.fail = false;
+      // In M_1, query code always appears first, while everything else is fact code.
+      self.query = (k == 0);
 
-      let encoded =
-        match is_double_word_instruction(&words.low) {
+      let mut words = TwoWords { low: 0, high: 0 };
+      while self.ip < self.code.len() {
+        words.low = self.code[self.ip];
+
+        let encoded = match is_double_word_instruction(&words.low) {
           true if self.ip + 1 < self.code.len() => {
             words.high = self.code[self.ip + 1];
+            // We increment `ip` by the size of the current instruction before we execute the
+            // instruction. That way the instruction has an opportunity to change control flow.
+            self.ip += 2;
             EncodedInstruction::DoubleWord(words)
           }
           true => {
@@ -775,24 +851,47 @@ impl WVM {
             panic!("Error: Unexpectedly ran out of bytecode.")
           }
           false => {
+            self.ip += 1; // See above comment.
             EncodedInstruction::Word(words.low)
           }
         };
 
-      let instruction: Instruction;
-      let maybe_instruction = try_decode_instruction(&encoded);
-      match maybe_instruction {
-        Some(i) => {
-          instruction = i;
-        }
-        None => {
-          eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
-          panic!();
-        }
-      }
+        let instruction: Instruction = match try_decode_instruction(&encoded) {
+          Some(i) => i,
+          None => {
+            eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
+            panic!();
+          }
+        };
 
-      self.exec(&instruction);
+        self.exec(&instruction);
+
+        // For M_1, every procedure fails to unify immediately at the atom's
+        // head except at most one. If that one unifies, `self.fail` is false.
+        if self.fail {
+          // unification failed, skip the rest of the procedure.
+          #[cfg(feature = "trace_computation")] println!("EARLY EXIT");
+          break;
+        }
+
+        // ToDo: This line prints the vm state twice at the end of a procedure because of `Proceed`.
+        #[cfg(feature = "trace_computation")] println!("{}", self);
+      } // end loop over instructions in procedure
+
+      // M_1 only finds at most one success, as there is at most one fact for a given head.
+      if !self.fail && self.query == false {
+        println!("TRUE");
+        break;
+      }
+    } // 'outer: finished iterating over procedures
+
+    #[cfg(feature = "trace_computation")]
+    self.print_result();
+
+    if self.fail {
+      println!("FALSE");
     }
+
   }
 
   /**
@@ -807,32 +906,34 @@ impl WVM {
         See bytecode/instruction.rs for the list of operations. Each opcode match needs:
           1. an `Operation`
           2. that matches the function call, and
-          3. to incrememnt `self.ip` according to the number of words in the instruction.
+          3. to increment `self.ip` according to the number of words in the instruction.
       */
 
       Instruction::BinaryFunctor { opcode, address, functor } => {
         match opcode {
-          PutStructure => { self.put_structure(functor, address); self.ip += 2;}
-          GetStructure => { self.get_structure(functor, address); self.ip += 2;}
+          PutStructure => { self.put_structure(functor, address);}
+          GetStructure => { self.get_structure(functor, address);}
           _            => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
+        // Update the register pointer. This is used for display, to point to the active register.
+        self.rp = address.idx();
       }
       Instruction::Binary { opcode, address1, address2 } => {
         match opcode {
-          PutVariable => { self.put_variable(address1, address2); self.ip += 2; }
-          GetVariable => { self.get_variable(address1, address2); self.ip += 2; }
-          PutValue    => { self.put_value(address1, address2);    self.ip += 2; }
-          GetValue    => { self.get_value(address1, address2);    self.ip += 2; }
+          PutVariable => { self.put_variable(address1, address2);}
+          GetVariable => { self.get_variable(address1, address2);}
+          PutValue    => { self.put_value(address1, address2);   }
+          GetValue    => { self.get_value(address1, address2);   }
           _           => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
       Instruction::Unary { opcode, address } => {
         match opcode {
-          SetVariable   => { self.set_variable(address);   self.ip += 1; }
-          SetValue      => { self.set_value(address);      self.ip += 1; }
-          UnifyVariable => { self.unify_variable(address); self.ip += 1; }
-          UnifyValue    => { self.unify_value(address);    self.ip += 1; }
-          Call          => { self.call(address);  /* Call sets `self.ip`.  */ }
+          SetVariable   => { self.set_variable(address);  }
+          SetValue      => { self.set_value(address);     }
+          UnifyVariable => { self.unify_variable(address);}
+          UnifyValue    => { self.unify_value(address);   }
+          Call          => { self.call(address);          }
           _             => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
@@ -872,27 +973,25 @@ impl Display for WVM {
   // We print the token_stack if `trace_computation` is on.
   #[cfg(feature = "trace_computation")]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table     = WVM::make_register_table('H', &self.heap,        self.hp,                0);
-    let x_table     = WVM::make_register_table('X', &self.registers,   self.rp,                1);
-    let token_table = WVM::make_register_table('Y', &self.token_stack, self.current_token - 1, 1);
+    let h_table     = WVM::make_register_table("HEAP", &self.heap,self.hp, 0);
+    let x_table     = WVM::make_register_table("X", &self.registers, self.rp, 1);
+    let token_table = WVM::make_register_table("TS", &self.token_stack,
+                                               self.current_token - 1, 1);
 
     let mut combined_table = table!([h_table, x_table, token_table]);
 
     combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    let success = match self.fail{
-      true  => "Failed to unify.",
-      false => "Unifying successfully."
-    };
-
-    write!(f, "Mode: {}\n{}\n{}", self.mode, success, combined_table)
+    write!(f, "Mode: {}\n{}", self.mode, combined_table)
   }
 
   #[cfg(not(feature = "trace_computation"))]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WVM::make_register_table('H', &self.heap,      self.hp, 0);
-    let x_table = WVM::make_register_table('X', &self.registers, self.rp, 1);
+    let h_table = WVM::make_register_table("HEAP", &self.heap,
+                                           self.hp, 0);
+    let x_table = WVM::make_register_table("X", &self.registers,
+                                           self.rp, 1);
 
 
     let mut combined_table = table!([h_table, x_table]);
@@ -900,15 +999,11 @@ impl Display for WVM {
     combined_table.set_titles(row![ub->"Heap", ub->"Registers"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    let success = match self.fail{
-      true  => "Failed to unify.",
-      false => "Unifying successfully."
-    };
-
-    write!(f, "Mode: {}\t{}\n{}", self.mode, success, combined_table)
+    write!(f, "Mode: {}\n{}", self.mode, combined_table)
   }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Mode{
   Read,
   Write
@@ -924,5 +1019,32 @@ impl Display for Mode{
         write!(f, "Write")
       }
     }
+  }
+}
+
+pub fn try_get_interned_functor(address: &Address) -> Option<Functor>{
+  let symbols       = SYMBOLS.lock().unwrap();
+  let maybe_functor = symbols.get_by_right(address);
+
+  match maybe_functor {
+    Some(functor) => Some(functor.clone()),
+    None          => None
+  }
+}
+
+/// Gives the virtual address of a `Functor`.
+pub fn intern_functor(functor: &Functor) -> Address{
+  let mut symbols = SYMBOLS.lock().unwrap();
+
+  match symbols.get_by_left(functor) {
+
+    Some(address) => *address,
+
+    None          => {
+      let address = Address::Functor(symbols.len());
+      symbols.insert(functor.clone(), address);
+      address
+    }
+
   }
 }

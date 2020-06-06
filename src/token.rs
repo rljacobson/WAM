@@ -225,16 +225,6 @@ impl Tokenizer{
       order.reverse();
     }
 
-    #[cfg(feature = "trace_computation")]
-      {
-        print!("Visit order: ");
-        let list = order.iter()
-                        .map(|c| { format!("{}", cell_vec[c.idx()])})
-                        .collect::<Vec<String>>()
-                        .join(", ");
-        println!("{}", list);
-      }
-
     Tokenizer{
       // The next available index
       outer_index: 0,

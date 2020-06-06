@@ -23,78 +23,18 @@ use crate::wvm::WVM;
 
 fn main() {
 
-
   #[cfg(feature = "trace_computation")]
   println!("Computation Tracing ENABLED");
 
-  let text = "?-p(Z,h(Z,W),f(W))";
-  // let ast = parser::parse(text);
-  println!("Query Expression: {}", text);
-  // println!("Parse Tree:\n{}\n", ast);
+  let text = "?-p(Z,h(Z,W),f(W))\n
+  \tj(f(Y), r(X), f(P, Q))\n
+  \tp(f(Y), r(X), f(P, Q))\n
+  \tp(f(X), h(Y, f(a)), Y)\n";
+  println!("Input Expression: \n\t{}", text);
 
   let mut machine = WVM::new();
   machine.compile(text, true, true);
 
   // println!("Internal Machine State:\n{}", machine);
 
-  let text = "p(f(X), h(Y, f(a)), Y)";
-  // let ast = parser::parse(text);
-  println!("Program Expression: {}", text);
-  // println!("Parse Tree:\n{}\n", ast);
-
-  machine.compile(text, true, true);
-
-  // println!("Internal Machine State:\n{}", machine);
-
-
-/*
-  let text = "SetVariable(2)
-SetVariable(5   )
-PutStructure(1, 4)
-      SetValue   (  5  )
-      PutStructure(3,1)
-    SetValue(2)
-    SetValue(3)     #### This is a thing
-    SetValue(4)
- Deallocate
-    GetStructure(3,1) # This line happens when we get a structure
-    Robert(2)
-    UnifyVariable(3)
- Allocate ( 6  )
-    UnifyVariable(4)
-
-
-
-  #  Alexia(2,3)
-
-
-    UnifyValue(4)
-    Lily(6)
-    GetStructure(1,6)
-UnifyVariable(7)
-GetStructure(1,2)
-UnifyVariable(5)
-GetStructure(345,7)
-
-
-    # almost done
-
-";
-
-
-//   let text = "PutStructure(1,4)
-// PutStructure(3,1)";
-  let result = bytecode::parse_assembly(text);
-  match result {
-    Ok((rest, list)) => {
-      for x in list{
-        println!("{}", x);
-      }
-      println!("Rest: {}", rest);
-    }
-    Err(e) => {
-      print!("{}", e);
-    }
-  }
-*/
 }
