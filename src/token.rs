@@ -14,13 +14,13 @@ use std::rc::Rc;
 
 use crate::address::Address;
 use crate::cell::{Cell, CellVec, extract_addresses, RcCell};
+use crate::term::*;
 use crate::functor::Functor;
 use crate::parser::parse;
-use crate::term::*;
 
 const MAXIMUM_ORDER_ATTEMPTS: usize = 200;
 
-#[derive(Copy, Clone, Eq, PartialEq, Debug, Hash)]
+#[derive(Clone, Eq, PartialEq, Debug, Hash)]
 pub enum Token{
   Register(Address),
   Assignment(Functor, Address)
@@ -62,34 +62,31 @@ impl Display for Token{
   semantic meaning. We can't simultaneously compile the term,
   because the flattened form needs to be ordered in a particular way.
 */
-pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
+pub fn flatten_term(ast: &RcTerm) -> (CellVec, Vec<Address>){
   let mut seen: HashMap<RcTerm, Address> = HashMap::new();
 
   // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
   // term its own register.
   let terms: TermIter = TermIter::new(&ast);
   for term in terms{
-    if !seen.contains_key(&term){
-      let address = Address::from_reg_idx(seen.len());
-      seen.insert(term, address);
-    }
+    let default = Address::from_reg_idx(seen.len());
+    seen.entry(term.clone()).or_insert(default);
   }
 
-  let mut registers = Box::new(Vec::<RcCell>::new());
+  let mut registers = Vec::<RcCell>::new();
   registers.resize(seen.len(), Rc::new(Cell::Empty));
 
   // Every term has a register assignment. Now populate the "registers".
   for (term, reg_ptr) in seen.iter(){
     match &**term{
 
-      Term::Structure {functor, args} => {
+      Term::Structure{functor, args} => {
         // Trying to be a bit too clever, probably.
-        let mut new_args = Box::new(
+        let mut new_args =
           args.iter()
               .map(|t| Rc::new(Cell::REF(*seen.get(t).unwrap())))
-              .collect::<Vec<RcCell>>()
-        );
-        new_args.insert(0, Rc::new(Cell::Functor(*functor)));
+              .collect::<Vec<RcCell>>();
+        new_args.insert(0, Rc::new(Cell::Functor(functor.clone())));
         registers[reg_ptr.idx()] = Rc::new(Cell::Structure(new_args.into()));
       },
 
@@ -109,18 +106,8 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   let rc_registers: CellVec = registers.into();
   let order = order_registers(rc_registers.clone());
 
-  #[cfg(feature = "trace_computation")]
-  {
-    print!("Visit order: ");
-    let list = order.iter()
-                    .map(|c| { format!("{}", rc_registers[c.idx()])})
-                    .collect::<Vec<String>>()
-                    .join(", ");
-    println!("{}", list);
-  }
-
   // order
-  (rc_registers.clone(), order)
+  (rc_registers, order)
 
 }
 
@@ -135,12 +122,12 @@ pub fn flatten_term(ast: RcTerm) -> (CellVec, Box<Vec<Address>>){
   > not be used in the right-hand side of an assignment (viz., as a subterm)
   > before its assignment, if it has one (viz., being the left-hand side).
 */
-pub fn order_registers(flat_terms: CellVec) -> Box<Vec<Address>>{
+pub fn order_registers(flat_terms: CellVec) -> Vec<Address>{
   // Contains the register arguments we've seen before.
   let mut seen: HashSet<Address> = HashSet::new();
   let mut unseen: HashSet<Address> = HashSet::new();
   // The vector holding the result
-  let mut ordered: Box<Vec<Address>> = Box::new(Vec::new());
+  let mut ordered: Vec<Address> = Vec::new();
 
   // First collect which registers need to be ordered, marking registers containing variables
   // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s..
@@ -209,6 +196,7 @@ pub fn order_registers(flat_terms: CellVec) -> Box<Vec<Address>>{
   Note that a `Tokenizer` cannot process `Term::Program` and `Term::Query` terms. Those should be
    stripped before creating a Tokenizer.
 */
+#[derive(Clone)]
 pub struct Tokenizer{
   outer_index: usize,
   inner_index: usize,
@@ -217,9 +205,9 @@ pub struct Tokenizer{
   #[cfg(not(feature = "trace_computation"))]
   cell_vec: CellVec,
   #[cfg(feature = "trace_computation")]
-  pub order: Box<Vec<Address>>,
+  pub order: Vec<Address>,
   #[cfg(not(feature = "trace_computation"))]
-  order: Box<Vec<Address>>,
+  order: Vec<Address>,
 }
 
 impl Tokenizer{
@@ -230,7 +218,7 @@ impl Tokenizer{
   }
   /// Convenience function that forwards to `Tokenizer::new()`.
   pub fn new_query(text: &str) -> Self{
-    Self::new(text, true)
+    Self::new(text, false)
   }
 
   /**
@@ -239,11 +227,9 @@ impl Tokenizer{
     assumes that the leading `"?-"` is trimmed from queries.
   */
   pub fn new(text: &str, is_program: bool) -> Self{
-    // STEP 1: Parse the text into a `Term`, which is a tree structure in general.
     let ast: RcTerm = parse(text);
 
-    // STEP 2&3: Flatten and order the terms, converting to `Cell`s in the process.
-    let (cell_vec, mut order) = flatten_term(ast.into());
+    let (cell_vec, mut order) = flatten_term(&ast);
     // Programs are ordered reverse of queries.
     if is_program {
       order.reverse();
@@ -276,7 +262,7 @@ impl Iterator for Tokenizer{
 
                   Cell::Functor(functor) => {
                     self.inner_index += 1;
-                    Some(Token::Assignment(*functor, self.order[self.outer_index]))
+                    Some(Token::Assignment(functor.clone(), self.order[self.outer_index]))
                   }
 
                   Cell::REF(address) => {
@@ -303,7 +289,7 @@ impl Iterator for Tokenizer{
           Cell::Functor(functor) => {
             // There should be only structures pointed to by addresses in `order`, but we allow
             // it in case it's useful elsewhere.
-            Some(Token::Assignment(*functor, Address::from_reg_idx(self.outer_index)))
+            Some(Token::Assignment(functor.clone(), Address::from_reg_idx(self.outer_index)))
           }
 
           _t => {

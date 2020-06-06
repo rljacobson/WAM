@@ -1,39 +1,38 @@
 //! Structures and functions for the Warren Virtual Machine, what I'm calling an
 //! implementation of Warren's Abstract Machine.
-#![allow(non_snake_case)]
 
-use std::cell::RefCell;
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
-use std::ops::Deref;
+use std::usize::MAX;
 use std::rc::Rc;
 
 use prettytable::{format as TableFormat, Table};
+use string_cache::DefaultAtom;
 
-use crate::address::Address;
-use crate::cell::{Cell, CellVec};
-use crate::functor::Functor;
+use crate::address::*;
+use crate::cell::*;
+use crate::functor::*;
 use crate::token::*;
-use std::usize::MAX;
+use crate::term::{TermVec, Term};
 
-type RcRefCell<T> = Rc<RefCell<T>>;
 
 #[allow(non_snake_case)]
 pub struct WVM {
-  /// Flag indicating unification failure.
-  fail : bool,
-  /// Read or Write mode.
-  mode : Mode,
-  /// A pointer to the next HEAP position to be read; a cursor.
-  S    : usize,
-  /// A pointer to the current register.
-  T    : usize,
-  /// The "global stack," a memory store.
-  HEAP : Vec<Cell>,
-  /// Query Registers
-  X    : RcRefCell<Vec<Cell>>,
+
+  // Flags
+  fail  : bool, // Indication of unification failure
+  mode  : Mode, // In Write mode, new elements are built on the heap.
+
+  // Memory Stores
+  heap: Vec<Cell>, // The "global stack," a memory store
+
+  // Registers //
+  hp        : usize,          // Heap Pointer, a cursor
+  rp        : usize,          // Register Pointer, a cursor
+  registers : Vec<Cell>, // Registers
+
   #[cfg(feature = "trace_computation")]
-  token_stack: CellVec,
+  token_stack: Vec<Token>,
   #[cfg(feature = "trace_computation")]
   current_token: usize
 }
@@ -42,8 +41,54 @@ impl WVM {
 
   // region Display methods
 
-  fn  make_register_table<T>(name: char, registers: &Vec<T>, highlight: Option<usize>, start: usize)
-    -> Table
+  /**
+    Gives the possibly intermediate results of unification for the query living at `X[1]`.
+  */
+  fn memory_to_term(&self, address: &Address) -> Term{
+
+    let data_address = self.dereference(address);
+    let cell = self.value_at(&data_address);
+    match cell {
+
+      | Cell::Functor(_)
+      | Cell::STR(_) => {
+        let functor_address = match self.extract_address(&cell) {
+          Some(add) => add,
+          None => data_address
+        };
+        let functor = self.extract_functor(&data_address).unwrap();
+        let mut args = TermVec::with_capacity((functor.arity) as usize);
+        for i in 1..functor.arity+1 {
+          // It is possible that not all arguments have been constructed yet.
+          if !((functor_address + i as usize).idx() < self.heap.len()) { break; }
+          args.push(Rc::new(self.memory_to_term(&(functor_address + i as usize))));
+        }
+
+        Term::Structure {
+          functor,
+          args
+        }
+      }
+
+      Cell::REF(var_address) if var_address == data_address => {
+        // A variable
+        Term::Variable(DefaultAtom::from(format!("V{}", var_address.idx())))
+      }
+
+      _ => {
+        eprintln!("Error: Could not construct a term from the cell at {}", data_address);
+        Term::Empty
+      }
+
+    }
+  }
+
+  fn make_register_table<T> (
+      name      : &str,
+      registers : &[T],
+      highlight : usize,
+      start     : usize
+    ) -> Table
     where T: Display{
     let mut table = Table::new();
 
@@ -51,16 +96,19 @@ impl WVM {
     table.set_titles(row![ubr->"Address", ubl->"Contents"]);
 
     for (i, cell) in registers.iter().enumerate() {
-      match Some(i)== highlight{
+      match i == highlight{
+
         true => {
           table.add_row(row![r->format!("* --> {}[{}] =", name, i+start), format!("{}", cell)]);
         }
         false => {
-          table.add_row(row![r->format!("{}[{}] =", name, i+start), format!("{}", cell)]);
-        }
+          table.add_row(
+            row![r->format!("{}[{}] =", name, i+start), format!("{}", cell)]
+          );
       }
 
-    }
+      } // end match on highlight
+    } // end for
     table
   }
 
@@ -71,15 +119,19 @@ impl WVM {
   pub fn new() -> WVM {
     WVM {
       fail :  false,
-      mode :  Mode::Write,
-      S    :  0,
-      T    :  0,
-      HEAP :  vec![],
-      X    :  Rc::new(RefCell::new(vec![])),
+      mode        :  Mode::Read, // Arbitrarily chosen.
+
+      heap        :  vec![],
+      registers   :  vec![],
+
+      hp:  0,
+      rp:  0,
+
       #[cfg(feature = "trace_computation")]
-      token_stack: Rc::new(vec![]),
+      token_stack: vec![],
       #[cfg(feature = "trace_computation")]
       current_token: MAX,
+
     }
   }
 
@@ -87,13 +139,11 @@ impl WVM {
   //  This function can't be in `crate::cell`, because it uses `self.value_at`.
   fn extract_functor(&self, address: &Address) -> Option<Functor>{
     match &self.value_at(address) {
-      Cell::Functor(functor)  => Some(*functor),
-      Cell::STR(inner_address)        => {
-        self.extract_functor( inner_address )
-      }
-      _ => {
-        None
-      }
+
+      Cell::Functor(functor)   => Some(functor.clone()),
+      Cell::STR(inner_address) => self.extract_functor(inner_address),
+      _                        => None
+
     }
   }
 
@@ -110,8 +160,8 @@ impl WVM {
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
-      Address::CellPtr(_)  => self.HEAP[ptr.idx()].clone(),
-      Address::RegPtr(_)   => self.X.deref().borrow()[ptr.idx()].clone()
+      Address::Heap(_)  => self.heap[ptr.idx()].clone(),
+      Address::Register(_)   => self.registers[ptr.idx()].clone()
     }
   }
 
@@ -124,19 +174,18 @@ impl WVM {
   fn set_value_at(&mut self, address: &Address, cell: &Cell){
     match address {
 
-      Address::RegPtr(_) => {
-        let mut x_ref = self.X.deref().borrow_mut();
-        if address.idx() >= x_ref.len() {
-          x_ref.resize(address.idx() + 1, Cell::Empty);
+      Address::Register(_) => {
+        if address.idx() >= self.registers.len() {
+          self.registers.resize(address.idx() + 1, Cell::Empty);
         }
-        x_ref[address.idx()] = cell.clone();
+        self.registers[address.idx()] = cell.clone();
       },
 
-      Address::CellPtr(_) => {
-        if address.idx() >= self.HEAP.len() {
-          self.HEAP.resize(address.idx() + 1, Cell::Empty);
+      Address::Heap(_) => {
+        if address.idx() >= self.heap.len() {
+          self.heap.resize(address.idx() + 1, Cell::Empty);
         }
-        self.HEAP[address.idx()] = cell.clone();
+        self.heap[address.idx()] = cell.clone();
       }
 
     }
@@ -169,8 +218,8 @@ impl WVM {
      1. Because the term needs to be flattened and reordered, we would
         have the "conversion" step no matter what.
 
-     2. Conversion from AST to `Cell`s allows us to
-        build in-memory representations directly "by hand."
+     2. Conversion from AST to `Cell`s allows us to build in-memory
+        representations directly "by hand" should we so desire.
 
   */
   pub fn compile(&mut self, text: &str){
@@ -197,15 +246,13 @@ impl WVM {
   fn compile_tokens(&mut self, tokenizer: Tokenizer, is_program: bool){
     // Contains the register arguments we've seen before.
     let mut seen: HashSet<Address> = HashSet::new();
+    self.rp = 0;
 
     #[cfg(feature = "trace_computation")]
       {
-        self.token_stack = Rc::new(
-          tokenizer.order
-                   .iter()
-                   .map( |a| {tokenizer.cell_vec[a.idx()].clone()})
-                   .collect()
-        );
+        let tokenizer_copy = tokenizer.clone();
+        self.token_stack = tokenizer_copy.collect();
+        self.current_token = 1;
         println!("{}", self);
         self.current_token = 0;
       }
@@ -215,26 +262,23 @@ impl WVM {
       match token {
 
         Token::Assignment(functor, address) => {
-
           seen.insert(address);
           match is_program {
+
             true => {  // Program
               self.get_structure(&functor, &address);
             }
+
             false => { // Query
               self.put_structure(&functor, &address);
             }
-          }
 
-          #[cfg(feature = "trace_computation")]
-          {
-            self.current_token += 1;
           }
-          self.T = address.idx();
 
         }
 
         Token::Register(address) => {
+
           match seen.contains(&address) {
 
             true => {
@@ -273,7 +317,11 @@ impl WVM {
         }
       } // end match on token type
       #[cfg(feature = "trace_computation")]
-      println!("{}", self);
+      {
+        self.current_token += 1;
+        println!("{}", self);
+      }
+
       if self.fail {
         break;
       };
@@ -289,53 +337,60 @@ impl WVM {
   fn dereference(& self, ptr: &Address) -> Address{
     let cell = self.value_at(ptr);
     match cell{
+
       // Do not dereference variables, which reference themselves.
-      Cell::REF(a) if a != *ptr =>
-        self.dereference(&a),
-      _ => *ptr,
-    } // end match cell
+      Cell::REF(a) if a != *ptr => self.dereference(&a),
+
+      _                         => *ptr,
+
+    }
   }
 
   /**
     Binds an unbound variable at one address to the other address. If both are unbound, the first
      is bound to the second (arbitrarily).
-  */
-  fn bind(&mut self, add1: &Address, add2: &Address){
-    #[cfg(feature = "trace_computation")]
-    print!("bind({}, {}): ", add1, add2);
-    let cell1 = self.value_at(add1);
-    let cell2 = self.value_at(add2);
 
-    match (cell1, cell2){
+     address1: heap address
+     address2: register address
+  */
+  fn bind(&mut self, address1: &Address, address2: &Address){
+    #[cfg(feature = "trace_computation")] print!("bind({}, {}): ", address1, address2);
+
+    let cell1 = self.value_at(address1);
+    let cell2 = self.value_at(address2);
+
+    match (&cell1, &cell2){
+
       // There are four branches instead of two in order to prefer binding a variable in a
       // register to a variable on the heap over the reverse.
-      (Cell::REF(add), _) if *add1 == add && add1.is_register() => {
+      (Cell::REF(address), _) if address1 == address && !address1.is_register() => {
         // `cell1` is a register variable. Bind to cell2.
-        #[cfg(feature = "trace_computation")]
-        println!("Binding {} to {}", add1, add2);
-        self.set_value_at(&add1, &Cell::REF(*add2));
-      },
-      (_, Cell::REF(add)) if *add2 == add && add2.is_register() => {
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address1, address2);
+        self.set_value_at(&address1, &Cell::REF(*address2));
+      }
+
+      (_, Cell::REF(address)) if address2 == address && !address2.is_register() => {
         // `cell2` is a register variable. Bind to cell1.
-        #[cfg(feature = "trace_computation")]
-        println!("Binding {} to {}", add2, add1);
-        self.set_value_at(&add2, &Cell::REF(*add1));
-      },
-      (Cell::REF(add), _) if *add1 == add => {
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address2, address1);
+        self.set_value_at(&address2, &Cell::REF(*address1));
+      }
+
+      (Cell::REF(address), _) if address1 == address => {
         // `cell1` is a variable. Bind to cell2.
-        #[cfg(feature = "trace_computation")]
-        println!("Binding {} to {}", add1, add2);
-        self.set_value_at(&add1, &Cell::REF(*add2));
-      },
-      (_, Cell::REF(add)) if *add2 == add => {
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address1, address2);
+        self.set_value_at(&address1, &Cell::REF(*address2));
+      }
+
+      (_, Cell::REF(address)) if address2 == address => {
         // `cell2` is a variable. Bind to cell1.
-        #[cfg(feature = "trace_computation")]
-        println!("Binding {} to {}", add2, add1);
-        self.set_value_at(&add2, &Cell::REF(*add1));
-      },
+        #[cfg(feature = "trace_computation")] println!("Binding {} to {}", address2, address1);
+        self.set_value_at(&address2, &Cell::REF(*address1));
+      }
+
       _ => {
         // Neither `cell1` nor `cell2` are variables, an error state.
-        unreachable!("Unreachable: bind called without a variable.");
+        unreachable!("Unreachable: bind called without a variable. Found:\n\t{}\n\t{}",
+                     cell1, cell2);
       }
     }
   }
@@ -347,15 +402,14 @@ impl WVM {
     Note: `structure` is not statically checked to be a `Cell:Structure`.
           Callers must ensure this contract is maintained on their own.
   */
-  fn put_structure(& mut self, functor: &Functor, reg_ptr: &Address) {
-    reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")]
-    println!("put_structure({}, {})", functor, reg_ptr);
-    let cell = Cell::STR(Address::from_heap_idx(self.HEAP.len() + 1));
-    self.HEAP.push(cell.clone());
-    self.HEAP.push(Cell::Functor(*functor));
+  fn put_structure(& mut self, functor: &Functor, address: &Address) {
+    address.require_register();
+    #[cfg(feature = "trace_computation")] println!("PutStructure({}, {})", functor, address);
 
-    self.set_value_at(reg_ptr, &cell);
+    let cell = Cell::STR(Address::from_heap_idx(self.heap.len() + 1));
+    self.heap.push(cell.clone());
+    self.heap.push(Cell::Functor(functor.clone()));
+    self.set_value_at(address, &cell);
   }
 
   /**
@@ -364,13 +418,15 @@ impl WVM {
 
     Note: `ptr` must be a register pointer, but this contract is not statically checked.
   */
-  fn set_variable(&mut self, reg_ptr: &Address) {
-    reg_ptr.require_register();
+  fn set_variable(&mut self, address: &Address) {
+    address.require_register();
+
     #[cfg(feature = "trace_computation")]
-    println!("set_variable({})", reg_ptr);
-    let cell = Cell::REF( Address::from_heap_idx( self.HEAP.len()) );
-    self.HEAP.push(cell.clone());
-    self.set_value_at(reg_ptr, &cell);
+    println!("set_variable({})", address);
+
+    let cell = Cell::REF( Address::from_heap_idx( self.heap.len()) );
+    self.heap.push(cell.clone());
+    self.set_value_at(address, &cell);
   }
 
   /**
@@ -384,52 +440,65 @@ impl WVM {
   */
   fn set_value(&mut self, reg_ptr: &Address) {
     reg_ptr.require_register();
+
     #[cfg(feature = "trace_computation")]
     println!("set_value({})", reg_ptr);
-    self.HEAP.push(self.value_at(reg_ptr));
+
+    self.heap.push(self.value_at(reg_ptr));
   }
 
   /**
     Either matches a functor, binds a variable to a new functor value, or fails.
 
-    Note: `reg_ptr` must be a pointer to a register, but this contract is not statically checked.
+    Note: `register_address` must be a pointer to a register, but this contract is not statically checked.
   */
-  fn get_structure(&mut self, funct: &Functor, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn get_structure(&mut self, functor: &Functor, address: &Address){
+    address.require_register();
 
-    let address = self.dereference(reg_ptr);
-    let cell_at_add = self.value_at(&address);
-    match cell_at_add {
+    let target_address = self.dereference(address);
+    let target_cell    = self.value_at(&target_address);
+
+    match target_cell {
+
       Cell::REF(_) => {
-        // A variable. Create a new functor structure for `funct` on the stack and bind the
-        // variable to the functor.
+        // A variable. Create a new functor structure for `functor` on the stack, bind the
+        // variable to the functor, and set `mode` to `Mode::Write`.
         #[cfg(feature = "trace_computation")]
-        println!("get_structure({}, {}): creating struct", funct, reg_ptr);
-        let funct_add = Address::from_heap_idx(self.HEAP.len() + 1);
-        let cell = Cell::STR(funct_add);
-        self.HEAP.push(cell.clone());
-        self.HEAP.push(Cell::Functor(*funct));
-        self.bind(&address, &funct_add);
-        self.mode = Mode::Write;
+          println!("GetStructure({}, {}): creating struct", functor, address);
+
+        let functor_idx = self.heap.len() + 1;
+        let functor_address = Address::from_heap_idx(functor_idx);
+        let cell            = Cell::STR(functor_address);
+        self.heap.push(cell);
+        self.heap.push(Cell::Functor(functor.clone()));
+
+        // Remember that we want to bind to the `STR`, not the `f/n`, so subtract 1..
+        self.bind(&target_address, &Address::from_heap_idx(functor_idx - 1));
+
+        self.mode           = Mode::Write;
       },
-      Cell::STR(cell_ptr @ Address::CellPtr(_)) => {
+
+      Cell::STR(heap_address @ Address::Heap(_)) => {
         // A pointer to a functor.
-        if self.HEAP[cell_ptr.idx()] == Cell::Functor(*funct) {
+        if self.heap[heap_address.idx()] == Cell::Functor(functor.clone()) {
           #[cfg(feature = "trace_computation")]
-          println!("get_structure({}, {}): functor already on stack", funct, reg_ptr);
-          self.S = cell_ptr.idx() + 1;
+            println!("get_structure({}, {}): functor already on stack", functor, address);
+
+          self.hp   = heap_address.idx() + 1;
           self.mode = Mode::Read;
+
         } else{
-          // Failed to unify
           #[cfg(feature = "trace_computation")]
-          println!("get_structure({}, {}) - STR points to nonexistent functor", funct, reg_ptr);
+            println!("get_structure({}, {}): STR points to different functor", functor, address);
           self.fail = true;
         }
-      },
-      _ => {
-        // Failed to unify
+      }
+
+      _c => {
+        // This is an error condition that should not happen in correct programs.
         #[cfg(feature = "trace_computation")]
-        println!("get_structure({}, {}) - neither REF nor STR found: {}", funct, reg_ptr, address);
+          println!("GetStructure({}, {}): neither REF nor STR found: {}",
+                   functor, address, _c);
         self.fail = true;
       }
     };
@@ -437,77 +506,84 @@ impl WVM {
 
   /**
     Either reads the top of the `HEAP` into register `X[i]` or creates a variable on the `HEAP`
-    and assigns it to register X[i}.
+    and copies it to register X[i}.
 
     Note: `ptr` must be a register pointer, but this contract is not statically checked.
   */
-  fn unify_variable(&mut self, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn unify_variable(&mut self, address: &Address){
+    address.require_register();
 
     match self.mode {
-      Mode::Read => {
+
+      Mode::Read  => {
         #[cfg(feature = "trace_computation")]
-        println!("unify_variable({}):  {} <- H[S={}]", reg_ptr, reg_ptr, self.S);
-        // ToDo: Extra copy here:
-        let value = &self.HEAP[self.S].clone();
-        self.set_value_at(reg_ptr, value);
-      } // end if Mode::Read
+          println!("UnifyVariable({}):  {} <- H[S={}]", address, address, self.hp);
+
+        let value = self.heap[self.hp].clone();
+        self.set_value_at(address, &value);
+      }
+
       Mode::Write => {
         #[cfg(feature = "trace_computation")]
-        print!("unify_variable({}):  ", reg_ptr);
-        self.set_variable(reg_ptr)
-      } // end if Mode::Write
+        print!("unify_variable({}):  ", address);
+
+        self.set_variable(address);
+      }
+
     } // end match mode
 
-    self.S += 1;
+    self.hp += 1;
   }
 
   /**
     Either pushes the value of `X[i]` onto the `HEAP` (write) or unifies `X[i]` and the cell at `S`.
 
-    Note: `reg_ptr` must be a register pointer, but this contract is not statically checked.
+    Note: `address` must be a register pointer, but this contract is not statically checked.
   */
-  fn unify_value(&mut self, reg_ptr: &Address){
-    reg_ptr.require_register();
+  fn unify_value(&mut self, address: &Address){
+    address.require_register();
 
     match self.mode {
-      Mode::Read => {
-        #[cfg(feature = "trace_computation")]
-        println!("unify_value({}):  unifying", reg_ptr);
-        self.unify(*reg_ptr, Address::from_heap_idx(self.S));
+
+      Mode::Read  => {
+        #[cfg(feature = "trace_computation")] println!("UnifyValue({}):  unifying", address);
+        self.unify(address, &Address::from_heap_idx(self.hp));
       }
+
       Mode::Write => {
-        #[cfg(feature = "trace_computation")]
-        print!("unify_value({}):  ", reg_ptr);
-        self.set_value(reg_ptr);
+        #[cfg(feature = "trace_computation")] print!("UnifyValue({}):  ", address);
+        self.set_value(address);
       }
     }
 
-    self.S += 1;
+    self.hp += 1;
   }
 
-  fn unify(&mut self, a1: Address, a2: Address){
-    let mut PDL: Vec<Address> = Vec::new();
+  fn unify(&mut self, a1: &Address, a2: &Address){
+    // In [Warren] the PDL (push down list) is global.
+    let mut pdl: Vec<Address> = Vec::new();
 
-    PDL.push(a1);
-    PDL.push(a2);
+    pdl.push(a1.clone());
+    pdl.push(a2.clone());
     self.fail = false;
-    while !(PDL.is_empty() || self.fail){
-      let b1 = PDL.pop().unwrap();
+    while !(pdl.is_empty() || self.fail){
+      let b1 = pdl.pop().unwrap();
       let b1 = &self.dereference(&b1);
-      let b2 = PDL.pop().unwrap();
+      let b2 = pdl.pop().unwrap();
       let b2 = &self.dereference(&b2);
       let c1 = self.value_at(b1);
       let c2 = self.value_at(b2);
       if c1 != c2 {
         match (&c1, &c2){
+
           | (Cell::REF(_),      _      )
           | (      _     , Cell::REF(_)) => {
             // One of `d1` and `d2` is a variable, and the other is either a variable or a
             // `Cell::STR` because of how functors are created on the `HEAP`.
             self.bind(b1, b2);
           },
-          _ => {
+
+          _                              => {
             // Neither `d1` nor `d2` are variables. In fact, we know that one of `d1` and `d2` is
             // a `Cell::STR` because of how functors are created on the `HEAP`.
             // println!("d1: {}\nd2: {}", d1, d2);
@@ -518,14 +594,15 @@ impl WVM {
               let v1 = self.extract_address(&c1).unwrap();
               let v2 = self.extract_address(&c2).unwrap();
               for n in 1..f1.unwrap().arity{
-                PDL.push(v1 + n.into());
-                PDL.push(v2 + n.into());
+                pdl.push(v1 + n as usize);
+                pdl.push(v2 + n as usize);
               }
             } else {
               self.fail = true;
               break;
             }
           }
+
         }
       }
     }
@@ -538,18 +615,14 @@ impl WVM {
 lazy_static! {
   static ref TABLE_DISPLAY_FORMAT: TableFormat::TableFormat =
     TableFormat::FormatBuilder::new()
-    .column_separator('│')
-    .borders(' ')
-    .separator(
-      TableFormat::LinePosition::Title,
-      TableFormat::LineSeparator::new('─', '┼', ' ', ' ')
-    )
-    .separator(
-      TableFormat::LinePosition::Bottom,
-      TableFormat::LineSeparator::new('─', '┴', ' ', ' ')
-    )
-    .padding(1, 1)
-    .build();
+      .column_separator('│')
+      .borders(' ')
+      .separator(
+        TableFormat::LinePosition::Title,
+        TableFormat::LineSeparator::new('─', '┼', ' ', ' ')
+      )
+      .padding(1, 1)
+      .build();
 }
 
 impl Display for WVM {
@@ -557,41 +630,45 @@ impl Display for WVM {
   // We print the token_stack if `trace_computation` is on.
   #[cfg(feature = "trace_computation")]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WVM::make_register_table('H', &self.HEAP, Some(self.S), 0);
-    let x_table = WVM::make_register_table('X', &self.X.deref().borrow(), Some (self.T), 1);
+    let h_table = WVM::make_register_table("HEAP", &self.heap, self.hp, 0);
+    let x_table = WVM::make_register_table("X", &self.registers, self.rp, 1);
+    let token_table = WVM::make_register_table("Y", &self.token_stack, self.current_token - 1, 1);
 
-    let token_table = WVM::make_register_table('Y', &self.token_stack, Some(self.current_token - 1
-    ), 1);
     let mut combined_table = table!([h_table, x_table, token_table]);
     combined_table.set_titles(row![ub->"Heap", ub->"Registers", ub->"Token Stack"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    let success = match self.fail{
-      true => "Failed to unify.",
-      false => "Unifying successfully."
-    };
-
-    write!(f, "Mode: {}\n{}\n{}", self.mode, success, combined_table)
+    if self.registers.is_empty() ||
+      (self.value_at(&Address::Register(1)) == Cell::Empty)
+    {
+      write!(f, "{}", combined_table)
+    } else {
+      let term = self.memory_to_term(&Address::Register(1));
+      write!(f, "{}\n{}\n", combined_table, term.as_expression_string())
+    }
   }
 
   #[cfg(not(feature = "trace_computation"))]
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WVM::make_register_table('H', &self.HEAP, Some(self.S), 0);
-    let x_table = WVM::make_register_table('X', &self.X.deref().borrow(), Some (self.T), 1);
+    let h_table = WVM::make_register_table("HEAP", &self.heap, self.hp, 0);
+    let x_table = WVM::make_register_table("X", &self.registers, self.rp, 1);
 
     let mut combined_table = table!([h_table, x_table]);
     combined_table.set_titles(row![ub->"Heap", ub->"Registers"]);
     combined_table.set_format(*TABLE_DISPLAY_FORMAT);
 
-    let success = match self.fail{
-      true => "Failed to unify.",
-      false => "Unifying successfully."
-    };
-
-    write!(f, "Mode: {}\t{}\n{}", self.mode, success, combined_table)
+    if self.registers.is_empty() ||
+      (self.value_at(&Address::Register(1)) == Cell::Empty)
+    {
+      write!(f, "{}", combined_table)
+    } else {
+      let term = self.memory_to_term(&Address::Register(1));
+      write!(f, "{}\n{}\n", combined_table, term.as_expression_string())
+    }
   }
 }
 
+#[derive(Copy, Clone, Eq, PartialEq, Debug)]
 enum Mode{
   Read,
   Write

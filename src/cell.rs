@@ -9,7 +9,7 @@ use crate::functor::Functor;
 use crate::term::RcTerm;
 
 pub type RcCell = Rc<Cell>;
-pub type CellVec = Rc<Vec<Rc<Cell>>>;
+pub type CellVec = Vec<Rc<Cell>>;
 
 #[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Cell {

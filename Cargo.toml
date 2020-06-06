@@ -10,6 +10,9 @@ default = ["trace_computation"]
 trace_computation = []
 
 [dependencies]
+# For displaying data as a formatted table:
 prettytable-rs = "^0.8"
+# For static prettytable style:
 lazy_static = "^1.4.0"
-
+# String interning:
+string_cache = "^0.8.0"

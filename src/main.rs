@@ -4,6 +4,7 @@
 
 #[macro_use] extern crate prettytable;
 #[macro_use] extern crate lazy_static;
+extern crate string_cache;
 
 mod wvm;
 mod cell;
@@ -21,19 +22,16 @@ fn main() {
   println!("Computation Tracing ENABLED");
 
   let text = "?-p(Z,h(Z,W),f(W))";
-  // let ast = parser::parse(text);
   println!("Query Expression: {}", text);
-  // println!("Parse Tree:\n{}\n", ast);
 
   let mut machine = WVM::new();
   machine.compile(text);
 
   // println!("Internal Machine State:\n{}", machine);
 
+
   let text = "p(f(X), h(Y, f(a)), Y)";
-  // let ast = parser::parse(text);
   println!("Program Expression: {}", text);
-  // println!("Parse Tree:\n{}\n", ast);
 
   machine.compile(text);
 
