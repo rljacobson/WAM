@@ -16,18 +16,16 @@ pub type TermVec = Vec<Rc<Term>>;
 /// Abstract representation
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Term {
-  /// An uppercase letter.
+  /// An interned string staring with an uppercase letter.
   Variable(DefaultAtom),
-  Structure {
-    functor: Functor,
-    args: TermVec
-  },
-  /// A top-level term for non-queries.
-  Program(RcTerm),
-  /// Denoted `?-q` ("What `q`"), a top-level term for queries.
-  Query(RcTerm),
   /// Structures hold functors. Constants are represented as functors of arity 0, so `args` might
   /// be an empty `Vec`.
+  Structure {
+    functor : Functor,
+    args    : TermVec
+  },
+  /// Denoted `?-q` ("What `q`"), a top-level term for queries. Anything else is a program.
+  Query(RcTerm),
   /// Epsilon is the empty Term, used only to indicate that there was nothing to parse.
   Empty
 }
@@ -98,15 +96,9 @@ impl Term{
       Term::Empty => {
         format!("{}ε", prefix)
       },
-      // Term::Register(i) => {
-      //   format!("{}Register<{}>", prefix, i)
-      // },
       Term::Variable(c) => {
         format!("{}Variable<{}>", prefix, c)
       },
-      Term::Program(inner) => {
-        format!("{}Program<{}>", prefix, inner)
-      }
       Term::Query(inner) => {
         format!("{}Query<{}>", prefix, inner)
       }

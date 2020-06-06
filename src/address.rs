@@ -4,10 +4,7 @@
 use std::ops::Add;
 use std::fmt::{Display, Formatter};
 
-use bimap::BiMap;
-
 use crate::bytecode::Word;
-use crate::functor::Functor;
 
 // `AddressType` is `usize`, as it is naturally an index into a memory store.
 pub type AddressNumberType = usize;

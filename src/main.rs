@@ -1,6 +1,4 @@
 #![feature(type_ascription, pattern)]
-#![allow(dead_code)]
-// ToDo: Remove the above `allow` attribute.
 
 #[macro_use] extern crate prettytable;
 #[macro_use] extern crate lazy_static;
@@ -32,11 +30,11 @@ fn main() {
     unification, and the matching program will not be matching against the original query but
     rather a query partially unified with some other program.
   */
-  let text = "?-p(Z,h(Z,W),f(W))
+  let text = "\t?-p(Z,h(Z,W),f(W))
   \tj(f(Y), r(X), f(P, Q))
   \ty(f(Y), r(X), f(P, Q))
   \tp(f(X), h(Y, f(a)), Y)";
-  println!("Input Expression: \n\t{}", text);
+  println!("Input Expression: \n{}", text);
 
   let mut machine = WVM::new();
   machine.compile(text, true, true);

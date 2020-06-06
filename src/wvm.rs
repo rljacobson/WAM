@@ -1,5 +1,6 @@
 //! Structures and functions for the Warren Virtual Machine, what I'm calling an
 //! implementation of Warren's Abstract Machine.
+#![allow(unused_parens)]
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -263,6 +264,7 @@ impl WVM {
 
   */
   pub fn compile(&mut self, text: &str, to_assembly: bool, execute: bool){
+    let compilation_time = std::time::Instant::now();
 
     // Parse the text into a `Term`, which is a tree structure in general.
     let (atoms, queries) = parse_source_code(text);
@@ -278,9 +280,11 @@ impl WVM {
       self.compile_tokens(tokenizer, true, to_assembly);
     }
 
+    println!("Compiled to {} bytes of bytecode in {:?}.",
+             self.code.len()*4, compilation_time.elapsed());
+
     #[cfg(feature = "trace_computation")]
       {
-        println!("Compiled to {} bytes of bytecode.", self.code.len()*4);
         if to_assembly {
           println!("% Assembly Code Instructions\n{}", self.assembly_buffer);
         }
@@ -910,9 +914,12 @@ impl WVM {
       // M_1 only finds at most one success, as there is at most one fact for a given head.
       if !self.fail && self.query == false {
 
-        let term = self.memory_to_term(&Address::Register(1));
         #[cfg(not(feature = "trace_computation"))]
-        println!("{}\n", term.as_expression_string());
+          {
+            let term = self.memory_to_term(&Address::Register(1));
+            println!("{}\n", term.as_expression_string());
+          }
+
         println!("TRUE");
         break;
       }
