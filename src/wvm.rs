@@ -76,8 +76,7 @@ impl WVM {
       }
 
       _ => {
-        eprintln!("Error: Could not construct a term from the cell at {}", data_address);
-        Term::Empty
+        panic!("Error: Could not construct a term from the cell at {}", data_address);
       }
 
     }

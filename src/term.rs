@@ -25,9 +25,7 @@ pub enum Term {
     args    : TermVec
   },
   /// Denoted `?-q` ("What `q`"), a top-level term for queries. Anything else is a program.
-  Query(RcTerm),
-  /// Epsilon is the empty Term, used only to indicate that there was nothing to parse.
-  Empty
+  Query(RcTerm)
 }
 
 impl Display for Term{
@@ -92,10 +90,7 @@ impl Term{
           }
         };
         buffer
-      },
-      Term::Empty => {
-        format!("{}ε", prefix)
-      },
+      }
       Term::Variable(c) => {
         format!("{}Variable<{}>", prefix, c)
       },
