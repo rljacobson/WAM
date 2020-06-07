@@ -41,7 +41,7 @@ pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
 
 
   if input.is_empty() {
-    return (atoms, queries);
+    panic!("Input is empty!")
   }
 
   // We need multiple mutable borrows for recursive calls to parsing functions.
@@ -54,7 +54,7 @@ pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
 
 
   loop {
-    let atom = parse_aux(&text_ref);
+    let atom = parse_aux(&text_ref).unwrap();
     if let Term::Query(term) = &atom {
       queries.push(term.clone());
     } else {
@@ -73,20 +73,19 @@ pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
 }
 
 
-fn parse_aux(text_ref: &RefCell<CharIter>) -> Term {
+fn parse_aux(text_ref: &RefCell<CharIter>) -> Option<Term> {
   let mut text = text_ref.borrow_mut();
   let mut next_char: char;
 
-  text.trim_left();
-
   // Handle Comments, which require resetting `next_char`.
   loop {
-    match text.next() {
+    text.trim_left();
+    match text.next(){
       Some(c) => {
         next_char = c;
       },
       None => {
-        return Term::Empty;
+        return None;
       }
     }
 
@@ -138,16 +137,16 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> Term {
     drop(text);
     let args = parse_arg_list(text_ref);
 
-    Term::Structure {
+    Some(Term::Structure {
       functor: Functor{name, arity: args.len() as ArityType},
       args
-    }
+    })
   }
 
   else if next_char == ',' || next_char == ')' {
     // The assumption here is that `parse_aux` was called recursively, and the current term has
     // been completely parsed.
-    Term::Empty
+    None
   }
 
   else if next_char.is_uppercase(){
@@ -162,22 +161,31 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> Term {
         None => DefaultAtom::from(next_char.to_string())
 
       };
-    Term::Variable(name)
+    Some(Term::Variable(name))
   }
 
   else if next_char == '?' {
     // Note: There is no equivalent case for `Term::Program`. Every non-query is a program.
     match text.next() {
+
       Some('-') => {
         // `parse_aux` needs a mutable borrow of text, so drop this one.
         drop(text);
-        // let term = ;
-        Term::Query(Rc::new(parse_aux(text_ref)))
+        let term_option = parse_aux(text_ref);
+        match term_option {
+
+          Some(term) => Some(Term::Query(Rc::new(term))),
+
+          None       => None
+
+        }
       }
+
       _ => {
         eprintln!("Error: Unexpected character `{}`", next_char);
         panic!();
       }
+
     }
   }
 
@@ -187,6 +195,10 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> Term {
   }
 }
 
+/**
+  Parses a comma separated list of terms and returns them in a vector. As functors can have zero
+  arguments (constants), the vector returned may be empty.
+*/
 fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
   let mut args: Vec<RcTerm> = Vec::new();
   let mut text = text_ref.borrow_mut();
@@ -202,20 +214,19 @@ fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
     }
   }
 
-  let mut term: RcTerm;
+  let mut term_option: Option<Term>;
 
   loop {
     // `parse_aux` needs a mutable borrow of text, so drop this one.
     drop(text);
-    term = Rc::new(parse_aux(text_ref));
+    term_option = parse_aux(text_ref);
     text = text_ref.borrow_mut();
     if text.is_empty(){
       eprintln!("Reached EOL while looking for `)`.");
       panic!();
     }
-
-    if *term != Term::Empty {
-      args.push(term);
+    if term_option != None {
+      args.push(Rc::new(term_option.unwrap()));
     } else {
       return args;
     }

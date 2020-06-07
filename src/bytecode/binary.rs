@@ -136,6 +136,7 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
 
 
 /// Returns the size in WORDS of an instruction for the corresponding opcode.
+#[allow(dead_code)]
 pub fn instruction_size(opcode: &Operation) -> u32{
   match Into::<u8>::into(*opcode) < MAX_DOUBLE_WORD_OPCODE {
     true  => 2, // Two words

@@ -94,8 +94,7 @@ impl WVM {
       }
 
       _ => {
-        eprintln!("Error: Could not construct a term from the cell at {}", data_address);
-        Term::Empty
+        panic!("Error: Could not construct a term from the cell at {}", data_address);
       }
 
     }
@@ -224,10 +223,12 @@ impl WVM {
     }
   }
 
+  #[allow(dead_code)]
   pub fn dump_assembly(&self) -> &str {
     self.assembly_buffer.as_str()
   }
 
+  #[allow(dead_code)]
   pub fn dump_bytecode(&self) -> &[u32]{
     self.code.as_slice()
   }

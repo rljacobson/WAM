@@ -129,7 +129,7 @@ pub fn order_registers(flat_terms: CellVec) -> Vec<Address>{
   let mut ordered: Vec<Address> = Vec::new();
 
   // First collect which registers need to be ordered, marking registers containing variables
-  // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s..
+  // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s.
   for (index, cell) in flat_terms.iter().enumerate(){
     match &**cell {
 
