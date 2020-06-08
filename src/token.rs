@@ -94,9 +94,8 @@ pub fn flatten_term(ast: &RcTerm) -> (CellVec, Vec<Address>){
       }
 
       _t => {
-        // This should never happen in correct code during compilation but may be useful for
-        // other reasons, e.g., testing.
-        registers[reg_ptr.idx()] = Rc::new(Cell::Term(term.clone()));
+        // This should never happen in correct code during compilation.
+        panic!("Error: Illegal term encountered: {}", _t);
       }
 
     };

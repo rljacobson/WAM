@@ -144,29 +144,3 @@ impl Iterator for TermIter{
 }
 
 // endregion TermIter
-
-/*
-#[cfg(test)]
-mod tests {
-  use super::*;
-  use crate::functor::ArityType;
-
-  pub fn make_struct(name: &str, v: &TermVec) -> RcTerm {
-    let new_vec = v.clone();
-
-    let arity = new_vec.len() as ArityType;
-
-    Rc::new(Term::Structure {
-      functor: Functor{ name: DefaultAtom::from(name), arity},
-      args: new_vec
-    })
-  }
-
-  pub fn new_struct_of_term(name: &str, term: &RcTerm) -> RcTerm {
-    Rc::new(Term::Structure {
-      functor: Functor{ name: DefaultAtom::from(name), arity: 1},
-      args: vc![term]
-    })
-  }
-}
-*/

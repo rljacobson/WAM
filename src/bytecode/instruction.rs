@@ -26,7 +26,7 @@ use crate::functor::Functor;
 */
 #[derive(
 StrumDisplay, IntoStaticStr, EnumString, TryFromPrimitive, IntoPrimitive,
-Clone,        Copy,          PartialEq,  Debug,            Hash
+Clone,        Copy,          Eq, PartialEq,  Debug,            Hash
 )]
 #[repr(u8)]
 pub enum Operation {
@@ -70,7 +70,7 @@ pub const MAX_DOUBLE_WORD_OPCODE: u8 = 6u8;
 pub const MAX_FUNCTOR_OPCODE: u8 = 2u8;
 
 /// Holds the unencoded components of an instruction
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Instruction {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]
   BinaryFunctor{
@@ -117,8 +117,16 @@ impl Display for Instruction {
 }
 
 impl Operation{
+  pub fn code(&self) -> u8 {
+    Into::<u8>::into(*self)
+  }
+
+  pub fn is_functor(&self) -> bool {
+    self.code() < MAX_FUNCTOR_OPCODE
+  }
+
   pub fn arity(&self) -> u32 {
-    match Into::<u8>::into(*self) {
+    match self.code() {
       value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
       value if value < MAX_BINARY_OPCODE => 1,
       _value => 0

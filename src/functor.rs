@@ -35,3 +35,7 @@ impl Display for Functor{
     }
   }
 }
+
+lazy_static!(
+  pub static ref DUMMY_FUNCTOR: Functor = Functor{ name: DefaultAtom::from("dummy"), arity: 0};
+);

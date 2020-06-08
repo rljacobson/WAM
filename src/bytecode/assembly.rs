@@ -5,38 +5,42 @@
 */
 
 use std::cell::RefCell;
-use std::fmt::Display;
+use std::fmt::{Display, Formatter};
 use std::str::FromStr;
 
+use string_cache::DefaultAtom;
 use nom::{
+  branch::alt,
   bytes::complete::is_not,
-  character::complete::{alpha1, char as one_char, digit1, line_ending, space0},
+  character::complete::{
+    alpha1,
+    char as one_char,
+    digit1,
+    line_ending,
+    space0
+  },
   combinator::{map, opt},
   error::ErrorKind,
-  IResult,
-  lib::std::fmt::Formatter,
-  multi::{many0, separated_list},
-  multi::many1,
+  multi::{
+    many0,
+    separated_list,
+    many1
+  },
   sequence::{
     delimited,
     pair,
     separated_pair,
-    tuple
+    tuple,
+    preceded,
+    terminated
   },
-  sequence::preceded,
-  sequence::terminated
+  bytes::complete::tag,
+  error::ParseError
 };
 
-use crate::address::{AddressType, Address};
+use crate::address::{AddressNumberType, Address};
 use crate::bytecode::{Instruction, Operation};
-
-// An `Either`-like enum to transparently collect source code errors.
-#[derive(Debug)]
-pub enum ParsedInstruction<'a> {
-  Binary((&'a str, usize, usize)),
-  Unary((&'a str, usize)),
-  Nullary(&'a str)
-}
+use crate::functor::Functor;
 
 pub enum ParsedAssemblySyntax<'a> {
   Instruction(Instruction),
@@ -47,11 +51,11 @@ pub enum ParsedAssemblySyntax<'a> {
   WrongArity{
     line: u32,
     operation: Operation,
-    args: Vec<AddressType>
+    args: Vec<AddressNumberType>
   }
 }
+// Abbreviated name internally
 use ParsedAssemblySyntax as Syntax;
-use nom::branch::alt;
 
 impl<'a> Display for ParsedAssemblySyntax<'a>{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -65,9 +69,9 @@ impl<'a> Display for ParsedAssemblySyntax<'a>{
       Syntax::WrongArity{line, operation, args} => {
         write!(f,
           "Error on line {}: {} requires {} arguments but was given {}: ({})",
-          line, operation, operation.arity(), operation,
+          line, operation, operation.arity(), args.len(),
            args.iter()
-               .map(AddressType::to_string)
+               .map(AddressNumberType::to_string)
                .collect::<Vec<String>>()
                .join(", ")
         )
@@ -76,25 +80,66 @@ impl<'a> Display for ParsedAssemblySyntax<'a>{
   }
 }
 
-// Abbreviated name internally
+fn parse_address(address_text: &str) -> Address{
+  let address_idx: AddressNumberType = address_text.parse::<AddressNumberType>().unwrap();
+  Address::Register(address_idx)
+}
 
-pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind)>{
+fn parse_functor(functor_pair: Vec<&str>) -> Functor {
+  let name = DefaultAtom::from(functor_pair[0]);
+  let arity: u32 =
+    match functor_pair.len(){
+      2 => functor_pair[1].parse::<AddressNumberType>().unwrap() as u32,
+      _ => 0
+    };
+  Functor{ name, arity  }
+  // println!("FUNCTORSTRING::  {:?}", functor_pair);
+  // Functor{ name: DefaultAtom::from("dummy".to_string()), arity: 0  }
+}
+
+pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::error::ErrorKind)>>{
   // Primitive error handling
-  let line_number: RefCell<u32> = RefCell::new(0);
+  // ToDo: Make this more accurate.
+  let line_number: RefCell<u32> = RefCell::new(1);
 
-  let comment = pair(one_char('%'), is_not("\n\r"));
-  let rest_of_line = terminated(space0, opt(&comment));
+  let comment_p = pair(one_char('%'), is_not("\n\r"));
+  let newline_p = map(preceded(opt(tuple((space0, comment_p))),line_ending), |out| {
+    let mut line_number_ref = line_number.borrow_mut();
+    *line_number_ref = *line_number_ref + 1;
+    out
+  });
+  let register_p = {
+    map(
+      delimited::<&str, _, _, _, (&str, ErrorKind), _, _, _>(
+        tag("X["), digit1, one_char(']'),
+      ),
+      |out: &str| vec![out],
+    )
+  };
+  let address_p = map(digit1, |out| vec![out]);
+  let functor_p = {
+    alt((
+      map(
+        separated_pair::<&str, _, _, _, (&str, ErrorKind), _, _, _>(
+          alpha1, one_char('/'), digit1,
+        ),
+        |out: (&str, &str)| vec![out.0, out.1],
+      ),
+      map(alpha1, |out: &str| vec![out])
+    ))
+  };
+  // let rest_of_line_p = terminated(space0, opt(&comment_p));
   let binary_inst_p = {
     tuple::<&str, _, (_, ErrorKind), _>((
       alpha1,
       delimited(
         delimited(space0, one_char('('), space0),
         separated_pair(
-          digit1,
+          alt((&address_p, &register_p, &functor_p)),
           delimited(space0, one_char(','), space0),
-          digit1,
+          alt((&address_p, &register_p)),
         ),
-        delimited(space0, one_char(')'), &rest_of_line),
+        preceded(space0, one_char(')')),
       )
     ))
   };
@@ -103,117 +148,129 @@ pub fn parse_assembly(text: &str) -> IResult<&str, Vec<Syntax>, (&str, ErrorKind
       alpha1,
       delimited(
         delimited(space0, one_char('('), space0),
-        digit1,
-        delimited(space0, one_char(')'), &rest_of_line),
+        alt((digit1, map(&register_p, |out: Vec<&str>| out[0]))),
+        preceded(space0, one_char(')')),
       )
     ))
   };
   let nullary_inst_p = {
-    tuple::<_, _, (_, ErrorKind), _>((
+    terminated(
       alpha1,
       opt(
-        terminated(
-          pair(
-            preceded(space0, one_char('(')),
+        delimited(
+          space0,
+          one_char('('),
             preceded(space0, one_char(')'))
-          ), // end pair
-          &rest_of_line
-        )// end terminated
+          )
       )// end opt
-    )) // end tuple
+    ) // end terminated
   };
 
-  let inst_list_p = separated_list(
-    many1(line_ending),
+  let inst_list_p = {
     delimited(
-      opt(tuple((space0, &comment, many1(line_ending)))),
-      alt((
-        map(preceded(space0, binary_inst_p),
-          | out | {
-            let mut ln_ref = line_number.borrow_mut();
-            *ln_ref += 1;
-            let opcode_result = Operation::from_str(out.0);
-            match opcode_result {
-              Ok(operation) if operation.arity() == 2 =>
-                Syntax::Instruction(Instruction::Binary {
-                  opcode: operation,
-                  address1: (out.1).0.parse::<AddressType>().unwrap(),
-                  address2: (out.1).1.parse::<AddressType>().unwrap(),
-                }),
-              Ok(operation) => {
-                Syntax::WrongArity {
-                  line: *ln_ref,
-                  operation,
-                  args: vec![
-                    (out.1).0.parse::<AddressType>().unwrap(),
-                    (out.1).1.parse::<AddressType>().unwrap()
-                  ]
+      many0(&newline_p),
+      separated_list::<&str, _, _, (&str, ErrorKind), _, _>(
+      many1(&newline_p),
+        delimited(
+          space0,
+          alt((
+            map(preceded(space0, binary_inst_p),
+              | out: (&str, _) | {
+                let opcode_result = Operation::from_str(out.0);
+                match opcode_result {
+                  Ok(operation) if operation.is_functor() =>
+                    Syntax::Instruction(Instruction::BinaryFunctor {
+                      opcode: operation,
+                      functor: parse_functor((out.1).0),
+                      address: parse_address((out.1).1[0]),
+                    }),
+                  Ok(operation) if operation.arity() !=2 => {
+                    Syntax::WrongArity {
+                      line: *line_number.borrow(),
+                      operation,
+                      args: vec![
+                        (out.1).0[0].parse::<AddressNumberType>().unwrap(),
+                        (out.1).1[0].parse::<AddressNumberType>().unwrap()
+                      ]
+                    }
+                  }
+                  Ok(operation) =>
+                    Syntax::Instruction(Instruction::Binary {
+                      opcode: operation,
+                      address1: parse_address((out.1).0[0]),
+                      address2: parse_address((out.1).1[1]),
+                    }),
+                  _e => {
+                    Syntax::NotAnOperation {
+                      line: *line_number.borrow(),
+                      name: out.0
+                    }
+                  }
+                }
+              }),
+            map(preceded(space0, unary_inst_p),
+              |out| {
+                let opcode_result = Operation::from_str(out.0);
+                match opcode_result {
+                  Ok(operation) if operation.arity() == 1 =>
+                    Syntax::Instruction(Instruction::Unary{
+                      opcode: operation,
+                      address: parse_address(out.1)
+                    }),
+                  Ok(operation) => {
+                    Syntax::WrongArity {
+                      line: *line_number.borrow(),
+                      operation,
+                      args: vec![
+                        out.1.parse::<AddressNumberType>().unwrap()
+                      ]
+                    }
+                  }
+                  _e => {
+                    Syntax::NotAnOperation {
+                      line: *line_number.borrow(),
+                      name: out.0
+                    }
+                  }
                 }
               }
-              _e => {
-                Syntax::NotAnOperation {
-                  line: *ln_ref,
-                  name: out.0
-                }
-              }
-            }
-          }),
-        map(preceded(space0, unary_inst_p),
-          |out| {
-            let mut ln_ref = line_number.borrow_mut();
-            *ln_ref += 1;
-            let opcode_result = Operation::from_str(out.0);
-            match opcode_result {
-              Ok(operation) if operation.arity() == 1 =>
-                Syntax::Instruction(Instruction::Unary{
-                  opcode: operation,
-                  address: out.1.parse::<AddressType>().unwrap()
-                }),
-              Ok(operation) => {
-                Syntax::WrongArity {
-                  line: *ln_ref,
-                  operation,
-                  args: vec![
-                    out.1.parse::<AddressType>().unwrap()
-                  ]
-                }
-              }
-              _e => {
-                Syntax::NotAnOperation {
-                  line: *ln_ref,
-                  name: out.0
-                }
-              }
-            }
-          }
-        ),
-        map(preceded(space0, nullary_inst_p),
-          |out| {
-            let mut ln_ref = line_number.borrow_mut();
-            *ln_ref += 1;
-            let opcode_result = Operation::from_str(out.0);
-            match opcode_result {
-              Ok(operation) if operation.arity() == 0 =>
-                Syntax::Instruction(Instruction::Nullary(operation)),
-              Ok(operation) => {
-                Syntax::WrongArity {
-                  line: *ln_ref,
-                  operation,
-                  args: vec![]
-                }
-              }
-              _e => {
-                Syntax::NotAnOperation {
-                  line: *ln_ref,
-                  name: out.0
-                }
-              }
-            }
-          }
-        )
-      )),
-      opt(tuple((space0, &comment, many0(line_ending))))
-    ));
+            ),
+            map(preceded(space0, nullary_inst_p),
+              |out| {
+                let opcode_result = Operation::from_str(out);
+                match opcode_result {
 
-  inst_list_p(text)
+                  Ok(operation) if operation.arity() == 0 =>
+                    Syntax::Instruction(Instruction::Nullary(operation)),
+
+                  Ok(operation) => {
+                    Syntax::WrongArity {
+                      line: *line_number.borrow(),
+                      operation,
+                      args: vec![]
+                    }
+                  }
+
+                  _e => {
+                    Syntax::NotAnOperation {
+                      line: *line_number.borrow(),
+                      name: out
+                    }
+                  }
+
+                }
+              }
+            )
+          )),
+          space0
+        )
+      ),
+      many0(&newline_p)
+    )
+  };
+
+  match inst_list_p(text) {
+    Ok((_s, syntax_vec)) => Ok(syntax_vec),
+    Err(_e) => Err(_e)
+  }
 }

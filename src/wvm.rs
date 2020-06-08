@@ -465,6 +465,57 @@ impl WVM {
 
   }
 
+  pub fn compile_assembly(&mut self, text: &str, execute: bool){
+    let mut should_emit = true;
+    let parsed_syntax =
+      match parse_assembly(text){
+        Ok(results) => results,
+        Err(e)      => {
+          eprintln!("Error: Failed to parse assembly: {}", e);
+          return;
+        }
+      };
+    let mut instructions: Vec<Instruction> = Vec::with_capacity(parsed_syntax.len());
+    for syntax in parsed_syntax{
+      match syntax {
+
+        ParsedAssemblySyntax::Instruction(instruction) => {
+          #[cfg(feature = "trace_computation")]
+            println!("{}", instruction);
+          instructions.push(instruction);
+        }
+
+        _error_syntax => {
+          eprintln!("{}", _error_syntax);
+          should_emit = false;
+        }
+
+      }
+    }
+
+    if should_emit {
+      let mut previous_instruction : Instruction = Instruction::Nullary(Operation::Proceed);
+      let mut previous_address     : Address = Address::Code(0);
+
+      for instruction in instructions {
+        // This block accommodates assembly code which does not have labels.
+        if (previous_address     == Address::Code(0)) ||
+           (&previous_instruction == &Instruction::Nullary(Operation::Proceed))
+        {
+          self.labels.push((DUMMY_FUNCTOR.clone(), previous_address))
+        }
+        self.emit_bytecode(encode_instruction(&instruction));
+
+        previous_address     = Address::from_code_idx(self.code.len());
+        previous_instruction = instruction;
+
+      }
+      if execute {
+        self.run();
+      }
+    }
+  }
+
   fn emit_assembly(&mut self, instruction: &Instruction, token: &Token){
     self.assembly_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), token).as_str());
   }
@@ -473,7 +524,7 @@ impl WVM {
   fn emit_bytecode(&mut self, instruction: EncodedInstruction){
     match instruction {
 
-      EncodedInstruction::Word(word) => {
+      EncodedInstruction::Word(word)              => {
         self.code.push(word)
       },
 
@@ -845,8 +896,7 @@ impl WVM {
     linearly. The `Call` instruction is also just for show. It is functional but never used.
 
     If we cared about speed, we would optimize this function and the functions it calls as much
-    as possible. But we don't care about speed. In fact, it's already really fast. Don't
-    micro-optimise.
+    as possible. But we don't care about speed. In fact, it's already really fast.
   */
   fn run(&mut self){
 
@@ -858,6 +908,8 @@ impl WVM {
       println!();
     }
 
+    // ToDo: Figure out how to do this the right way: &mut self iterates over its data member
+    //       using one of its own methods.
     let labels = self.labels.clone();
     for (k, (_functor, address)) in labels.iter().enumerate() {
       self.ip   = address.idx();

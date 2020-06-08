@@ -19,12 +19,10 @@ pub enum Cell {
   REF(Address),
   /// A functor, displayed as `f/n`, where `n` is the functor's arity.
   Functor(Functor),
-  /// A functor structure and children, used as an intermediate representation in registers. It
+  /// A functor structure with children, used as an intermediate representation in registers. It
   /// displays as a functor followed by a sequence of its children.
   Structure(CellVec),
-  /// Used to record context in an error condition.
-  Term(RcTerm),
-  /// A cell containing nothing. Used when growing a CellVec so it can be filled out of order.
+  /// A cell containing nothing. Used when growing a memory store so it can be filled out of order.
   Empty
 }
 
@@ -44,18 +42,14 @@ impl Display for Cell{
         write!(
           f,
           "{}",
-          v
-            .iter()
-            .map(|c| { format!("{}", c)})
-            .collect::<Vec<String>>()
-            .join(", ")
+          v.iter()
+           .map(|c| { format!("{}", c)})
+           .collect::<Vec<String>>()
+           .join(", ")
         )
       },
-      Cell::Term(term) => {
-        write!(f, "{}", term)
-      }
       Cell::Empty => {
-        write!(f, "`")
+        write!(f, "")
       },
     }
   }

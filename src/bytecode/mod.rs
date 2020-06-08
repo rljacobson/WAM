@@ -26,10 +26,12 @@
 
 */
 
+pub use assembly::{parse_assembly, ParsedAssemblySyntax};
+pub use binary::{encode_instruction, EncodedInstruction, is_double_word_instruction,
+                 try_decode_instruction, TwoWords, Word};
+pub use instruction::{Instruction, Operation};
+
 mod binary;
 mod instruction;
-// mod assembly;
+mod assembly;
 
-pub use binary::{encode_instruction, try_decode_instruction, is_double_word_instruction,
-                 EncodedInstruction, Word, TwoWords};
-pub use instruction::{Instruction, Operation};
