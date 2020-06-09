@@ -5,7 +5,9 @@ use std::fmt::{Formatter, Display};
 
 use string_cache::DefaultAtom;
 
-pub type ArityType = u32;
+use crate::bytecode::Word;
+
+pub type ArityType = Word;
 
 /**
   The `Functor` struct represents a symbol f/n. These symbols have value semantics. Functors are

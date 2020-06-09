@@ -23,7 +23,12 @@ lazy_static! {
   /**
     This symbol table keeps track of the names of functors that have been compiled to bytecode so
     that the names can be reconstituted for the human reader. Otherwise, functors would have
-    auto-generated names. An alternative is to serialize the names to bytecode.
+    auto-generated names. (An alternative design choice is to serialize the names to bytecode.)
+
+    The symbol table associates to each unique functor a "virtual address," which is a
+    stand-in for the functor's text name `f/n` in bytecode. This is distinct from the internal
+    representation of the interned string of the name, which is handled by `string_cache`. The
+    virtual address is embedded in bytecode instructions that take a functor as arguments.
   */
   pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
     Arc::new(Mutex::new(BiMap::new()));
@@ -38,21 +43,19 @@ pub struct WVM {
   mode  : Mode, // In Write mode, new elements are built on the heap.
 
   // Memory Stores
-  heap: Vec<Cell>, // The "global stack," a memory store
-  code: Vec<u32>,  // Code memory, a memory store
+  heap : Vec<Cell>, // Data memory store ("global stack" in [Warren])
+  code : Vec<Word>,  // Code memory, a memory store
 
   // Registers //
-  hp        : usize,          // Heap Pointer, a cursor
-  rp        : usize,          // Register Pointer, a cursor
-  ip        : usize,          // Instruction Pointer
-  registers : Vec<Cell>, // Term registers
+  hp        : usize,     // Heap Pointer, a cursor for unification (S in [Aït-Kaci])
+  rp        : usize,     // Register Pointer, a cursor for display
+  ip        : usize,     // Instruction Pointer (P in [Aït-Kaci])
+  cp        : usize,     // Call/Control Pointer, the jump target for `Proceed`
+  registers : Vec<Cell>, // Term registers, a memory store (X[i] in [Aït-Kaci])
 
   // Symbol table mapping line labels to their address in code memory.
-  labels    : Vec<(Functor, Address)>,
-  // Symbol table mapping functor SYMBOLS `f/n` to a "virtual" address.
-  // SYMBOLS   : BiMap<Functor, Address>,
-
-  assembly_buffer: String, // String buffer for emitted code text
+  labels          : Vec<(Functor, Address)>,
+  assembly_buffer : String, // String buffer for emitted code text
 }
 
 impl WVM {
@@ -94,7 +97,9 @@ impl WVM {
       }
 
       _ => {
-        panic!("Error: Could not construct a term from the cell at {}", data_address);
+        // Indicates a bug, as this should not happen in valid code.
+        eprintln!("Error: Could not construct a term from the cell at {}", data_address);
+        Term::Variable(DefaultAtom::from("empty"))
       }
 
     }
@@ -140,19 +145,20 @@ impl WVM {
   
   pub fn new() -> WVM {
     WVM {
-      fail        :  false,
-      query       :  true,
-      mode        :  Mode::Read, // Arbitrarily chosen.
+      fail       :  false,
+      query      :  true,
+      mode       :  Mode::Read, // Arbitrarily chosen.
 
-      heap        :  vec![],
-      code        :  vec![],
-      registers   :  vec![],
+      heap       :  vec![],
+      code       :  vec![],
+      registers  :  vec![],
 
-      hp          :  0,
-      rp          :  0,
-      ip          :  0,
+      hp         :  0,
+      rp         :  0,
+      ip         :  0,
+      cp         :  0,
 
-      labels      :  Vec::new(),
+      labels     :  Vec::new(),
       assembly_buffer:  String::new(),
     }
   }
@@ -229,7 +235,7 @@ impl WVM {
   }
 
   #[allow(dead_code)]
-  pub fn dump_bytecode(&self) -> &[u32]{
+  pub fn dump_bytecode(&self) -> &[Word]{
     self.code.as_slice()
   }
 
@@ -281,6 +287,8 @@ impl WVM {
       self.compile_tokens(tokenizer, true, to_assembly);
     }
 
+    self.compile_bytecode_header(to_assembly);
+
     println!("Compiled to {} bytes of bytecode in {:?}.",
              self.code.len()*4, compilation_time.elapsed());
 
@@ -293,6 +301,61 @@ impl WVM {
 
     if execute {
       self.run();
+    }
+  }
+
+  /**
+    A helper function for `compile` that prepends `Call` instructions at the beginning of
+    `self.code`.
+
+    For each procedure, insert a `Call f/n` instruction at the beginning of
+    the bytecode that calls the procedure so that each is called in order.
+  */
+  fn compile_bytecode_header(&mut self, to_assembly: bool){
+    // Offset is the length in `Word`s of the added header. The
+    // addresses of each procedure need to be adjusted by this amount.
+    let offset = self.labels.len() + 1; // The `+1` is for `Halt`.
+
+    let mut new_encoded: Vec<Bytecode> =
+      Vec::with_capacity(offset + self.code.len());
+    let mut new_code: Vec<Word> =
+      Vec::with_capacity(offset + self.code.len());
+    let mut new_assembly: String = String::new();
+
+    new_encoded.extend(
+      self.labels.iter().map(
+        |(f, a)| {
+          let instruction = Instruction::Unary {
+            opcode: Operation::Call,
+            address: *a + (offset as AddressNumberType),
+          };
+          if to_assembly {
+            new_assembly.push_str(
+              format!("{:30}%   {}\n", format!("{}", instruction), f).as_str()
+            );
+          }
+          encode_instruction(&instruction)
+        })
+    );
+    // Finally, a `Halt`
+    let halt = Instruction::Nullary(Operation::Halt);
+    new_encoded.push(encode_instruction(&halt));
+    if to_assembly {
+      new_assembly.push_str(
+        format!("{:30}%   {}\n", format!("{}", halt), "End Program").as_str()
+      );
+    }
+
+    // Switcheroo
+    new_code = std::mem::replace(&mut self.code, new_code);
+    for i in new_encoded {
+      self.emit_bytecode(i);
+    }
+
+    self.code.append(&mut new_code);
+    if to_assembly{
+      new_assembly.push_str(self.assembly_buffer.as_str());
+      self.assembly_buffer = new_assembly;
     }
   }
 
@@ -466,7 +529,8 @@ impl WVM {
   }
 
   pub fn compile_assembly(&mut self, text: &str, execute: bool){
-    let mut should_emit = true;
+    let compilation_time = std::time::Instant::now();
+    let mut parsing_succeeded = true;
     let parsed_syntax =
       match parse_assembly(text){
         Ok(results) => results,
@@ -480,40 +544,31 @@ impl WVM {
       match syntax {
 
         ParsedAssemblySyntax::Instruction(instruction) => {
-          #[cfg(feature = "trace_computation")]
-            println!("{}", instruction);
+          // #[cfg(feature = "trace_computation")]
+          //   println!("{}", instruction);
           instructions.push(instruction);
         }
 
         _error_syntax => {
           eprintln!("{}", _error_syntax);
-          should_emit = false;
+          parsing_succeeded = false;
         }
 
       }
     }
 
-    if should_emit {
-      let mut previous_instruction : Instruction = Instruction::Nullary(Operation::Proceed);
-      let mut previous_address     : Address = Address::Code(0);
-
+    if parsing_succeeded {
       for instruction in instructions {
-        // This block accommodates assembly code which does not have labels.
-        if (previous_address     == Address::Code(0)) ||
-           (&previous_instruction == &Instruction::Nullary(Operation::Proceed))
-        {
-          self.labels.push((DUMMY_FUNCTOR.clone(), previous_address))
-        }
         self.emit_bytecode(encode_instruction(&instruction));
-
-        previous_address     = Address::from_code_idx(self.code.len());
-        previous_instruction = instruction;
-
       }
+
+      println!("Compiled to {} bytes of bytecode in {:?}.",
+               self.code.len()*4, compilation_time.elapsed());
+
       if execute {
         self.run();
       }
-    }
+    } // end if succeeded
   }
 
   fn emit_assembly(&mut self, instruction: &Instruction, token: &Token){
@@ -521,14 +576,14 @@ impl WVM {
   }
 
   /// This method only inserts bytes into `self.code`.
-  fn emit_bytecode(&mut self, instruction: EncodedInstruction){
+  fn emit_bytecode(&mut self, instruction: Bytecode){
     match instruction {
 
-      EncodedInstruction::Word(word)              => {
+      Bytecode::Word(word)              => {
         self.code.push(word)
       },
 
-      EncodedInstruction::DoubleWord(double_word) => {
+      Bytecode::DoubleWord(double_word) => {
         let words: TwoWords;
         unsafe {
           words = std::mem::transmute(double_word);
@@ -873,7 +928,20 @@ impl WVM {
     address.require_code();
     #[cfg(feature = "trace_computation")] println!("Call({})", address);
 
+    self.cp = self.ip;
     self.ip = address.idx();
+  }
+
+  /// Marks the end of a procedure and jumps to the address stored in `self.cp`.
+  fn proceed(&mut self){
+    #[cfg(feature = "trace_computation")] println!("Proceed");
+    self.ip = self.cp;
+  }
+
+  /// Halts execution of the virtual machine by setting `self.ip` to the end of the code region.
+  fn halt(&mut self){
+    #[cfg(feature = "trace_computation")] println!("Halt");
+    self.ip = self.code.len();
   }
 
   // endregion
@@ -908,75 +976,84 @@ impl WVM {
       println!();
     }
 
-    // ToDo: Figure out how to do this the right way: &mut self iterates over its data member
-    //       using one of its own methods.
-    let labels = self.labels.clone();
-    for (k, (_functor, address)) in labels.iter().enumerate() {
-      self.ip   = address.idx();
-      self.fail = false;
-      // In M_1, query code always appears first, while everything else is fact code.
-      self.query = (k == 0);
+    self.ip   = 0;
+    self.fail = false;
+    // In M_1, query code always appears first, while everything else is fact code.
+    self.query = true;
 
-      let mut words = TwoWords { low: 0, high: 0 };
-      while self.ip < self.code.len() {
-        words.low = self.code[self.ip];
+    let mut words = TwoWords { low: 0, high: 0 };
+    loop {
+      if self.ip >= self.code.len() {
+        // Either a `Halt` instruction was executed, or we ran out of bytecode to run.
+        break;
+      }
+      words.low = self.code[self.ip];
 
-        let encoded = match is_double_word_instruction(&words.low) {
-          true if self.ip + 1 < self.code.len() => {
-            words.high = self.code[self.ip + 1];
-            // We increment `ip` by the size of the current instruction before we execute the
-            // instruction. That way the instruction has an opportunity to change control flow.
-            self.ip += 2;
-            EncodedInstruction::DoubleWord(words)
-          }
-          true => {
-            // Needs another word, but there are no more.
-            panic!("Error: Unexpectedly ran out of bytecode.")
-          }
-          false => {
-            self.ip += 1; // See above comment.
-            EncodedInstruction::Word(words.low)
-          }
-        };
+      let encoded = match is_double_word_instruction(&words.low) {
 
-        let instruction: Instruction = match try_decode_instruction(&encoded) {
-          Some(Instruction::Nullary(Operation::Proceed)) => {
-            // End of procedure, stop executing instructions linearly.
-            break;
+        true if self.ip + 1 < self.code.len() => {
+          words.high = self.code[self.ip + 1];
+          // We increment `ip` by the size of the current instruction before we execute the
+          // instruction. That way the instruction has an opportunity to change control flow.
+          self.ip += 2;
+          Bytecode::DoubleWord(words)
+        }
+
+        true => {
+          // Needs another word, but there are no more.
+          panic!("Error: Unexpectedly ran out of bytecode.")
+        }
+
+        false => {
+          self.ip += 1; // See above comment.
+          Bytecode::Word(words.low)
+        }
+
+      };
+
+      let instruction: Instruction =
+        match try_decode_instruction(&encoded) {
+
+          Some(i @ Instruction::Nullary(Operation::Proceed)) => {
+            // End of procedure
+            // M_2 only finds at most one success, as there is at most one fact for a given head.
+            if !self.fail && self.query == false {
+
+              #[cfg(not(feature = "trace_computation"))]
+                {
+                  let term = self.memory_to_term(&Address::Register(1));
+                  println!("{}\n", term.as_expression_string());
+                }
+
+              println!("TRUE");
+              return;
+            }
+            self.fail = false;
+            self.query = false;
+            i
           },
+
           Some(i) => i,
+
           None => {
             eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
             panic!();
           }
         };
 
-        self.exec(&instruction);
+      self.exec(&instruction);
 
-        // For M_1, every procedure fails to unify immediately at the atom's
-        // head except at most one. If that one unifies, `self.fail` is false.
-        if self.fail {
-          // unification failed, skip the rest of the procedure.
-          #[cfg(feature = "trace_computation")] println!("EARLY EXIT");
-          break;
-        }
-
-        #[cfg(feature = "trace_computation")] println!("{}", self);
-      } // end loop over instructions in procedure
-
-      // M_1 only finds at most one success, as there is at most one fact for a given head.
-      if !self.fail && self.query == false {
-
-        #[cfg(not(feature = "trace_computation"))]
-          {
-            let term = self.memory_to_term(&Address::Register(1));
-            println!("{}\n", term.as_expression_string());
-          }
-
-        println!("TRUE");
-        break;
+      // For M_1, every procedure fails to unify immediately at the atom's
+      // head except at most one. If that one unifies, `self.fail` is false.
+      if self.fail {
+        // unification failed, skip the rest of the procedure.
+        #[cfg(feature = "trace_computation")] println!("EARLY EXIT");
+        self.fail = false;
+        self.proceed();
       }
-    } // 'outer: finished iterating over procedures
+
+      #[cfg(feature = "trace_computation")] println!("{}", self);
+    } // end loop over instructions in procedure
 
     if self.fail {
       println!("FALSE");
@@ -1029,7 +1106,8 @@ impl WVM {
       }
       Instruction::Nullary(opcode) => {
         match opcode {
-          Proceed => { /* Proceed is a noop in M_1. */ }
+          Proceed => { self.proceed(); }
+          Halt    => { self.halt();  }
           _       => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
@@ -1118,7 +1196,8 @@ pub fn try_get_interned_functor(address: &Address) -> Option<Functor>{
   }
 }
 
-/// Gives the virtual address of a `Functor`.
+/// Gives the virtual address of a `Functor`, creating a new entry in the symbol table if
+/// necessary. The virtual address is a stand-in for the functor's text name in compiled code.
 pub fn intern_functor(functor: &Functor) -> Address{
   let mut symbols = SYMBOLS.lock().unwrap();
 

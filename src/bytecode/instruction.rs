@@ -7,6 +7,7 @@ use num_enum::{TryFromPrimitive, IntoPrimitive};
 
 use crate::address::{Address};
 use crate::functor::Functor;
+use crate::bytecode::Word;
 // pub use assembly::parse_assembly;
 
 /**
@@ -55,12 +56,13 @@ pub enum Operation {
   // M2 Opcode //
   Allocate,          // allocate( n )
   // Opcode 12
-  // Padded byte Opcodes (32 bits) //
 
+  // Padded byte Opcodes (32 bits) //
   // M1 Opcode //
   Proceed,           // proceed
 
   // M2 Opcode //
+  Halt,              // halt
   Deallocate,        // deallocate
 
 }
@@ -125,7 +127,7 @@ impl Operation{
     self.code() < MAX_FUNCTOR_OPCODE
   }
 
-  pub fn arity(&self) -> u32 {
+  pub fn arity(&self) -> Word {
     match self.code() {
       value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
       value if value < MAX_BINARY_OPCODE => 1,

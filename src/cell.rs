@@ -6,7 +6,6 @@ use std::rc::Rc;
 
 use crate::functor::Functor;
 use crate::address::Address;
-use crate::term::RcTerm;
 
 pub type RcCell = Rc<Cell>;
 pub type CellVec = Rc<Vec<Rc<Cell>>>;

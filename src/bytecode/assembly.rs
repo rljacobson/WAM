@@ -20,7 +20,6 @@ use nom::{
     space0
   },
   combinator::{map, opt},
-  error::ErrorKind,
   multi::{
     many0,
     separated_list,
@@ -33,23 +32,21 @@ use nom::{
     tuple,
     preceded,
     terminated
-  },
-  bytes::complete::tag,
-  error::ParseError
+  }
 };
 
 use crate::address::{AddressNumberType, Address};
-use crate::bytecode::{Instruction, Operation};
+use crate::bytecode::{Instruction, Operation, Word};
 use crate::functor::Functor;
 
 pub enum ParsedAssemblySyntax<'a> {
   Instruction(Instruction),
   NotAnOperation{
-    line: u32,
+    line: Word,
     name: &'a str
   },
   WrongArity{
-    line: u32,
+    line: Word,
     operation: Operation,
     args: Vec<AddressNumberType>
   }
@@ -87,20 +84,17 @@ fn parse_address(address_text: &str) -> Address{
 
 fn parse_functor(functor_pair: Vec<&str>) -> Functor {
   let name = DefaultAtom::from(functor_pair[0]);
-  let arity: u32 =
+  let arity: Word =
     match functor_pair.len(){
-      2 => functor_pair[1].parse::<AddressNumberType>().unwrap() as u32,
+      2 => functor_pair[1].parse::<AddressNumberType>().unwrap() as Word,
       _ => 0
     };
   Functor{ name, arity  }
-  // println!("FUNCTORSTRING::  {:?}", functor_pair);
-  // Functor{ name: DefaultAtom::from("dummy".to_string()), arity: 0  }
 }
 
 pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::error::ErrorKind)>>{
   // Primitive error handling
-  // ToDo: Make this more accurate.
-  let line_number: RefCell<u32> = RefCell::new(1);
+  let line_number: RefCell<Word> = RefCell::new(1);
 
   let comment_p = pair(one_char('%'), is_not("\n\r"));
   let newline_p = map(preceded(opt(tuple((space0, comment_p))),line_ending), |out| {
@@ -108,47 +102,43 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
     *line_number_ref = *line_number_ref + 1;
     out
   });
-  let register_p = {
+  let maybe_wrapped_number_p = {
     map(
-      delimited::<&str, _, _, _, (&str, ErrorKind), _, _, _>(
-        tag("X["), digit1, one_char(']'),
-      ),
-      |out: &str| vec![out],
-    )
+      alt((
+        delimited(
+          terminated(alpha1, one_char('[')), digit1, one_char(']'),
+        ),
+        digit1
+      )),
+      |out: &str| vec![out])
   };
-  let address_p = map(digit1, |out| vec![out]);
   let functor_p = {
     alt((
-      map(
-        separated_pair::<&str, _, _, _, (&str, ErrorKind), _, _, _>(
-          alpha1, one_char('/'), digit1,
-        ),
-        |out: (&str, &str)| vec![out.0, out.1],
-      ),
+      map(separated_pair( alpha1, one_char('/'), digit1),
+        |out: (&str, &str)| vec![out.0, out.1]),
       map(alpha1, |out: &str| vec![out])
     ))
   };
-  // let rest_of_line_p = terminated(space0, opt(&comment_p));
   let binary_inst_p = {
-    tuple::<&str, _, (_, ErrorKind), _>((
+    tuple((
       alpha1,
       delimited(
         delimited(space0, one_char('('), space0),
         separated_pair(
-          alt((&address_p, &register_p, &functor_p)),
+          alt((&maybe_wrapped_number_p, &functor_p)),
           delimited(space0, one_char(','), space0),
-          alt((&address_p, &register_p)),
+          &maybe_wrapped_number_p,
         ),
         preceded(space0, one_char(')')),
       )
     ))
   };
   let unary_inst_p = {
-    tuple::<&str, _, (_, ErrorKind), _>((
+    tuple((
       alpha1,
       delimited(
         delimited(space0, one_char('('), space0),
-        alt((digit1, map(&register_p, |out: Vec<&str>| out[0]))),
+        alt((digit1, map(&maybe_wrapped_number_p, |out: Vec<&str>| out[0]))),
         preceded(space0, one_char(')')),
       )
     ))
@@ -169,7 +159,7 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
   let inst_list_p = {
     delimited(
       many0(&newline_p),
-      separated_list::<&str, _, _, (&str, ErrorKind), _, _>(
+      separated_list(
       many1(&newline_p),
         delimited(
           space0,
@@ -212,11 +202,19 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
               |out| {
                 let opcode_result = Operation::from_str(out.0);
                 match opcode_result {
-                  Ok(operation) if operation.arity() == 1 =>
-                    Syntax::Instruction(Instruction::Unary{
+                  Ok(Operation::Call) => {
+                    let idx = out.1.parse::<AddressNumberType>().unwrap();
+                    Syntax::Instruction(Instruction::Unary {
+                      opcode: Operation::Call,
+                      address: Address::Code(idx),
+                    })
+                  },
+                  Ok(operation) if operation.arity() == 1 => {
+                    Syntax::Instruction(Instruction::Unary {
                       opcode: operation,
-                      address: parse_address(out.1)
-                    }),
+                      address: parse_address(out.1),
+                    })
+                  },
                   Ok(operation) => {
                     Syntax::WrongArity {
                       line: *line_number.borrow(),

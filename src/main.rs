@@ -1,5 +1,8 @@
 #![feature(type_ascription, pattern)]
-#![type_length_limit="2289023"]  // nom's type inference requirements
+// nom's type inference requirements
+// See https://github.com/rust-lang/rust/issues/54540
+#![type_length_limit="4180863"]
+#![allow(dead_code)]
 
 #[macro_use] extern crate prettytable;
 #[macro_use] extern crate lazy_static;
@@ -19,7 +22,7 @@ mod token;
 mod bytecode;
 
 use crate::wvm::WVM;
-use crate::bytecode::parse_assembly;
+// use crate::bytecode::parse_assembly;
 
 fn main() {
 
@@ -27,7 +30,7 @@ fn main() {
   println!("Computation Tracing ENABLED");
 
   /*
-    It is important that in M_1 no two facts have the same head atom. Otherwise, the failure of
+    It is important in M_1 that no two facts have the same head atom. Otherwise, the failure of
     the first version of the atom will have changed the registers because of its partial
     unification, and the matching program will not be matching against the original query but
     rather a query partially unified with some other program.
@@ -40,7 +43,7 @@ fn main() {
   println!("Input Expression: \n{}", text);
 
   let mut machine = WVM::new();
-  machine.compile(text, true, true);
+  machine.compile(text, true, false);
   */
 
   let path = "/Users/rjacobson/Development/wam/ignore/assembly.txt";
@@ -49,6 +52,5 @@ fn main() {
   let mut machine = WVM::new();
   machine.compile_assembly(assembly.as_str(), true);
 
-  // println!("Internal Machine State:\n{}", machine);
 
 }

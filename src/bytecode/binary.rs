@@ -31,23 +31,27 @@ pub struct TwoWords {
 /// An `Either` type for an encoded instruction, allowing the instruction to be
 /// either one word or two.
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub enum EncodedInstruction{
+pub enum Bytecode {
   Word(Word),
   DoubleWord(TwoWords)
 }
 
 
-pub fn try_decode_instruction(encoded: &EncodedInstruction) -> Option<Instruction> {
+pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
   let mut bytecode = TwoWords{ low: 0, high: 0 };
   match &encoded {
-    EncodedInstruction::Word(w)        => { bytecode.low = *w; }
-    EncodedInstruction::DoubleWord(tw) => { bytecode = *tw; }
+    Bytecode::Word(w)        => { bytecode.low = *w; }
+    Bytecode::DoubleWord(tw) => { bytecode = *tw; }
   }
 
-  let opcode = match Operation::try_from((bytecode.low & 0xFF) as u8) {
-    Ok(v)   => Some(v),
-    Err(_e) => None // ToDo: panic!("{}", e);
-  };
+  let opcode =
+    match Operation::try_from((bytecode.low & 0xFF) as u8) {
+
+      Ok(v)   => Some(v),
+
+      Err(_e) => None // ToDo: panic!("{}", e);
+
+    };
   if opcode == None{
     return None;
   }
@@ -55,7 +59,8 @@ pub fn try_decode_instruction(encoded: &EncodedInstruction) -> Option<Instructio
   let opcode = opcode.unwrap();
   let opcode_value = Into::<u8>::into(opcode);
 
-  let instruction = // the value of the following if statement
+  let instruction =
+    // = the value of the following giant if statement:
   if opcode_value < MAX_FUNCTOR_OPCODE {
     // [OpCode:8][Address:24][Name:16][Arity:16]
     Instruction::BinaryFunctor {
@@ -76,11 +81,17 @@ pub fn try_decode_instruction(encoded: &EncodedInstruction) -> Option<Instructio
 
   else if opcode_value < MAX_BINARY_OPCODE {
     // [OpCode:8][Address:24]
+    let address =
+      match opcode {
+        Operation::Call => Address::from_code_idx((bytecode.low >> 8) as usize),
+        _ => Address::from_reg_idx((bytecode.low >> 8) as usize)
+      };
     Instruction::Unary {
       opcode,
-      address: Address::from_reg_idx((bytecode.low >> 8) as usize)
+      address
     }
   }
+
   else {
     // [OpCode:8]
     Instruction::Nullary(opcode)
@@ -95,11 +106,11 @@ pub fn try_decode_instruction(encoded: &EncodedInstruction) -> Option<Instructio
   Encodes the instruction into bytecode. It is the caller's responsibility to
   use the correct `InstructionArguments` variant for the given opcode.
 */
-pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
+pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
   match instruction{
 
     Instruction::BinaryFunctor {opcode, address, functor} => {
-      EncodedInstruction::DoubleWord(
+      Bytecode::DoubleWord(
         TwoWords {
           low: (Into::<u8>::into(*opcode) as Word) + (address.enc() << 8),
           high: encode_functor(&functor),
@@ -111,7 +122,7 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
       let add1 = address1.enc();
       let add2 = address2.enc();
       // [OpCode:8][Address:24][Address:24][Reserved:8]
-      EncodedInstruction::DoubleWord(
+      Bytecode::DoubleWord(
         TwoWords {
           low: (Into::<u8>::into(*opcode) as Word) + (add1 << 8),
           high: add2,
@@ -122,14 +133,14 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
     Instruction::Unary {opcode, address} => {
       let add = address.enc() as Word;
       // [OpCode:8][Address:24]
-      EncodedInstruction::Word(
+      Bytecode::Word(
         (Into::<u8>::into(*opcode) as Word) + (add << 8 )
       )
     },
 
     Instruction::Nullary(opcode) => {
       // [OpCode:8]
-      EncodedInstruction::Word(Into::<u8>::into(*opcode) as Word)
+      Bytecode::Word(Into::<u8>::into(*opcode) as Word)
     },
   }
 }
@@ -137,7 +148,7 @@ pub fn encode_instruction(instruction: &Instruction) -> EncodedInstruction{
 
 /// Returns the size in WORDS of an instruction for the corresponding opcode.
 #[allow(dead_code)]
-pub fn instruction_size(opcode: &Operation) -> u32{
+pub fn instruction_size(opcode: &Operation) -> Word{
   match Into::<u8>::into(*opcode) < MAX_DOUBLE_WORD_OPCODE {
     true  => 2, // Two words
     false => 1  // One Word
