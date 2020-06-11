@@ -336,8 +336,9 @@ With the vector of registers created with enough empty cells to hold each term, 
       Term::Structure {functor, args} => {
         // Create a vector of cells out of the argument terms, translating 
         // those terms into `Cell::REF`'s that point to the register assigned 
-        // to the 
-        let mut new_args = Box::new(
+        // to the terms.
+        let mut new_args = Box::new(CellVec::with_capacity(args.len() + 1);
+        new_args
           args.iter()
               .map(|t| Rc::new(Cell::REF(*seen.get(t).unwrap())))
               .collect::<Vec<RcCell>>()

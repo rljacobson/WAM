@@ -28,7 +28,7 @@ use std::rc::Rc;
 use string_cache::DefaultAtom;
 
 use crate::chariter::CharIter;
-use crate::term::{RcTerm, Term, TermVec};
+use crate::term::{Term, TermVec};
 use crate::functor::{Functor, ArityType};
 
 
@@ -55,10 +55,10 @@ pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
 
   loop {
     let atom = parse_aux(&text_ref).unwrap();
-    if let Term::Query(term) = &atom {
-      queries.push(term.clone());
+    if let Term::Query(term) = atom {
+      queries.push(Rc::try_unwrap(term).unwrap());
     } else {
-      atoms.push(Rc::new(atom));
+      atoms.push(atom);
     }
     let mut text = RefCell::borrow_mut(&*text_ref);
 
@@ -200,7 +200,7 @@ fn parse_aux(text_ref: &RefCell<CharIter>) -> Option<Term> {
   arguments (constants), the vector returned may be empty.
 */
 fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
-  let mut args: Vec<RcTerm> = Vec::new();
+  let mut args: TermVec = Vec::new();
   let mut text = text_ref.borrow_mut();
 
   text.trim_left();
@@ -226,7 +226,7 @@ fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
       panic!();
     }
     if term_option != None {
-      args.push(Rc::new(term_option.unwrap()));
+      args.push(term_option.unwrap());
     } else {
       return args;
     }

@@ -10,10 +10,10 @@ use crate::bytecode::Word;
 pub type ArityType = Word;
 
 /**
-  The `Functor` struct represents a symbol f/n. These symbols have value semantics. Functors are
-  interned to preserve their names during serializing and deserializing bytecode. As with all
-  strings in this codebase, `Functor::name` is interned. Note that f/2 != f/3, i.e. functors are
-  the same if and only if both their names and their arity are the same.
+  The `Functor` struct represents a symbol f/n. Clones are cheap. Functors are interned
+  to preserve their names during serializing and deserializing bytecode. As with all
+  strings in this codebase, `Functor::name` is interned. Note that f/2 != f/3, i.e.
+  functors are the same if and only if both their name and their arity are the same.
 */
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct Functor {

@@ -18,11 +18,9 @@ mod parser;
 mod chariter;
 mod functor;
 mod term;
-mod token;
 mod bytecode;
 
 use crate::wvm::WVM;
-// use crate::bytecode::parse_assembly;
 
 fn main() {
 
@@ -35,7 +33,6 @@ fn main() {
     unification, and the matching program will not be matching against the original query but
     rather a query partially unified with some other program.
   */
-  /*
   let text = "\t?-p(Z,h(Z,W),f(W))
   \tj(f(Y), r(X), f(P, Q))
   \ty(f(Y), r(X), f(P, Q))
@@ -43,14 +40,15 @@ fn main() {
   println!("Input Expression: \n{}", text);
 
   let mut machine = WVM::new();
-  machine.compile(text, true, false);
-  */
+  machine.compile(text, true, true);
+  /*
 
-  let path = "/Users/rjacobson/Development/wam/ignore/assembly.txt";
+  let path = "/Users/rljacobson/Development/wam/ignore/assembly.txt";
   let assembly = std::fs::read_to_string(path).unwrap();
   // println!("File contents: \n{}\n", assembly);
   let mut machine = WVM::new();
   machine.compile_assembly(assembly.as_str(), true);
+  */
 
 
 }

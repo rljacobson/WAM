@@ -104,7 +104,7 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
 
 /**
   Encodes the instruction into bytecode. It is the caller's responsibility to
-  use the correct `InstructionArguments` variant for the given opcode.
+  use the correct `Instruction` variant for the given opcode.
 */
 pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
   match instruction{
@@ -166,7 +166,7 @@ pub fn is_double_word_instruction(word: &Word) -> bool{
 }
 
 
-pub fn decode_functor(word: &Word) -> Functor{
+fn decode_functor(word: &Word) -> Functor{
   let functor_address = Address::from_funct_idx((word & 0xFFFF) as usize);
 
   match try_get_interned_functor(&functor_address) {
@@ -190,7 +190,7 @@ pub fn decode_functor(word: &Word) -> Functor{
   }
 }
 
-pub fn encode_functor(functor: &Functor) -> Word{
+fn encode_functor(functor: &Functor) -> Word{
   let functor_address = intern_functor(functor);
 
   ((functor.arity as Word) << 16) + (functor_address.idx() as Word)

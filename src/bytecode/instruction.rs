@@ -71,7 +71,8 @@ pub const MAX_BINARY_OPCODE: u8 = 12u8;
 pub const MAX_DOUBLE_WORD_OPCODE: u8 = 6u8;
 pub const MAX_FUNCTOR_OPCODE: u8 = 2u8;
 
-/// Holds the unencoded components of an instruction
+/// Holds the unencoded components of an instruction. As such, it enumerates the possible
+/// instruction argument combinations.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Instruction {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]

@@ -2,9 +2,12 @@
 //! implementation of Warren's Abstract Machine.
 #![allow(unused_parens)]
 
-use std::collections::HashSet;
-use std::fmt::{Display, Formatter};
-use std::sync::{Arc, Mutex};
+use std::{
+  sync::{Arc, Mutex},
+  fmt::{Display, Formatter},
+  collections::HashSet,
+  cell::RefCell
+};
 
 use prettytable::{format as TableFormat, Table};
 use bimap::BiMap;
@@ -12,12 +15,11 @@ use string_cache::DefaultAtom;
 
 use crate::address::*;
 use crate::cell::*;
-use crate::token::*;
 use crate::functor::*;
 use crate::bytecode::*;
+use crate::term::*;
 use crate::parser::parse as parse_source_code;
-use crate::term::{Term, TermVec};
-use std::rc::Rc;
+
 
 lazy_static! {
   /**
@@ -73,7 +75,7 @@ impl WVM {
 
       | Cell::Functor(_)
       | Cell::STR(_) => {
-        let functor_address = match self.extract_address(&cell) {
+        let functor_address = match cell.extract_address() {
           Some(add) => add,
           None => data_address
         };
@@ -82,7 +84,7 @@ impl WVM {
         for i in 1..functor.arity + 1 {
           // It is possible that not all arguments have been constructed yet.
           if !((functor_address + i as usize).idx() < self.heap.len()) { break; }
-          args.push(Rc::new(self.memory_to_term(&(functor_address + i as usize))));
+          args.push(self.memory_to_term(&(functor_address + i as usize)));
         }
 
         Term::Structure {
@@ -163,38 +165,33 @@ impl WVM {
     }
   }
 
-  /// Extracts the functor from either `Cell::Structure` or `Cell::STR` values.
-  //  This function can't be in `crate::cell`, because it uses `self.value_at`.
+
+  /// Extracts the functor from either `Cell::Structure`, `Cell::Functor`, or `Cell::STR` values.
   fn extract_functor(&self, address: &Address) -> Option<Functor>{
     match &self.value_at(address) {
 
-      Cell::Functor(functor)   => Some(functor.clone()),
       Cell::STR(inner_address) => self.extract_functor(inner_address),
-      _                        => None
+
+      cell                     => cell.extract_functor()
 
     }
   }
 
-  /// Extracts the address from either `Cell::REF` or `Cell::STR` values.
-  //  This function isn't in `crate::cell`, because `extract_functor` can't be.
-  fn extract_address(&self, cell: &Cell) -> Option<Address>{
-    match cell {
-      | Cell::REF(address)
-      | Cell::STR(address) => Some(*address),
-      _                    => None
-    }
-  }
 
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
+
       Address::Heap(_) => self.heap[ptr.idx()].clone(),
+
       Address::Register(_) => self.registers[ptr.idx()].clone(),
+
       | Address::Functor(_)
       | Address::Code(_) => {
         eprintln!("Tried to use `value_at()` with a code address: {}", ptr);
         panic!();
       }
+
     }
   }
 
@@ -278,13 +275,11 @@ impl WVM {
 
     // Queries
     for ast in queries{
-      let tokenizer = Tokenizer::new(&ast, false);
-      self.compile_tokens(tokenizer, false, to_assembly);
+      self.compile_tokens(&ast, false, to_assembly);
     }
     // Programs
     for ast in atoms{
-      let tokenizer = Tokenizer::new(&ast, true);
-      self.compile_tokens(tokenizer, true, to_assembly);
+      self.compile_tokens(&ast, true, to_assembly);
     }
 
     self.compile_bytecode_header(to_assembly);
@@ -366,151 +361,129 @@ impl WVM {
     This function assumes that the term has been prepared with `flatten_term`.
   */
   fn compile_tokens(
-    &mut self, tokenizer: Tokenizer,
+    &mut self, ast: &Term,
     is_program: bool,
     to_assembly: bool
   ){
+
+    // Flatten and order the terms, converting to `Cell`s in the process.
+    let (cell_vec, mut order): (CellVec, Vec<usize>) = ast.flatten_term();
+    // Programs are ordered reverse of queries.
+    if is_program {
+      order.reverse();
+    }
+
     // Contains the register arguments we've seen before.
-    let mut seen: HashSet<Address> = HashSet::new();
+    let seen: RefCell<HashSet<Address>> = RefCell::new(HashSet::with_capacity(order.len()));
 
-    // Flag the first token.
-    let mut outermost = true;
-
-    // We iterate over the tokens in the registers in `order`.
-    for token in tokenizer {
-
-      // Book keeping for the outermost term, which defines the procedure/query
-      if outermost {
-        // The instruction we are about to push onto `self.code` will
-        // be the first instruction of `procedure`. No checking is
-        // done to see if there already is a procedure with this name.
-        let procedure_address = Address::Code(self.code.len() as AddressNumberType);
-        // The first token MUST be a Token::Assignment in M_1, but the compiler doesn't know that.
-        if let Token::Assignment(functor, _address) = &token{
-          self.labels.push((functor.clone(), procedure_address));
-        }
-
-        if to_assembly {
-          match is_program{
-            true  => self.assembly_buffer.push_str(format!("% Procedure {}\n", &token).as_str()),
-            false => self.assembly_buffer.push_str(format!("% Query\n").as_str()),
+    // A helpful auxiliary so we don't have to repeat ourselves, capturing `is_program` and `seen`
+    let cell_ref_address_matched = |address: &Address| -> Instruction{
+      let was_seen = seen.borrow().contains(&address);
+      match was_seen {
+        true  => {
+          // Already saw this register.
+          match is_program {
+            // Program
+            true  =>  Instruction::Unary {
+              opcode: Operation::UnifyValue,
+              address: *address
+            },
+            // Query
+            false =>  Instruction::Unary {
+              opcode: Operation::SetValue,
+              address: *address
+            }
           }
         }
-        outermost = false;
-      }
 
-      match &token {
-
-        Token::Assignment(functor, register_address) => {
-          seen.insert(*register_address);
-
+        false => {
+          // Have not seen this register before.
+          seen.borrow_mut().insert(*address);
           match is_program {
-
-            true  => {  // Program
-
-              // Record functor so its name can be reconstituted from bytecode.
-              intern_functor(&functor);
-              let instruction =
-                Instruction::BinaryFunctor {
-                  opcode: Operation::GetStructure,
-                  address: *register_address,  // Register address
-                  functor: functor.clone(),
-                };
-              self.emit_bytecode(encode_instruction(&instruction));
-
-              if to_assembly {
-                self.emit_assembly(&instruction, &token);
-              }
+            // Program
+            true  =>  Instruction::Unary {
+              opcode: Operation::UnifyVariable,
+              address: *address
+            },
+            // Query
+            false =>  Instruction::Unary {
+              opcode: Operation::SetVariable,
+              address: *address
             }
-
-            false => { // Query
-
-              let instruction =
-                Instruction::BinaryFunctor {
-                  opcode: Operation::PutStructure,
-                  address: *register_address,
-                  functor: functor.clone()
-                };
-              self.emit_bytecode(encode_instruction(&instruction));
-
-              if to_assembly {
-                self.emit_assembly(&instruction, &token);
-              }
-            }
-
           } // end match is_program
-        } // end is assignment
+        }
+      } // end if seen address before
+    };
 
-        Token::Register(address) => {
+    // Bookkeeping for the outermost term, which defines the procedure/query. The first
+    // instruction we are about to push onto `self.code` will be the first instruction of
+    // `procedure`. No checking is done to see if there already is a procedure with this name.
+    let procedure_address = Address::Code(self.code.len() as AddressNumberType);
+    let functor = cell_vec[order[0]].extract_functor().unwrap();
+    // The first cell is guaranteed to be a `Cell::Structure`, so `unwrap()` is safe.
+    self.labels.push((functor.clone(), procedure_address));
 
-          match seen.contains(&address) {
+    if to_assembly {
+      match is_program{
+        true  => self.assembly_buffer.push_str(format!("% Procedure {}\n", functor).as_str()),
+        false => self.assembly_buffer.push_str(format!("% Query\n").as_str()),
+      }
+    }
 
-            true  => {
-              // Already saw this register.
-              match is_program {
+    // We iterate over the tokens in the registers in `order`.
+    for index in order {
+      let term = &cell_vec[index];
+      match &term {
 
-                true  => {  // Program
-                  let instruction =
-                    Instruction::Unary {
-                      opcode: Operation::UnifyValue,
-                      address: *address
-                    };
-                  self.emit_bytecode(encode_instruction(&instruction));
+        Cell::Structure(args) => {
+          let register_address = Address::from_reg_idx(index);
+          let functor = term.extract_functor().unwrap();
+          // Record functor so its name can be reconstituted from bytecode.
+          intern_functor(&functor);
+          seen.borrow_mut().insert(register_address);
 
-                  if to_assembly {
-                    self.emit_assembly(&instruction, &token);
-                  }
-                }
+          let mut instruction =
+            match is_program {
+              // Program
+              true  =>  Instruction::BinaryFunctor {
+                          opcode: Operation::GetStructure,
+                          address: register_address,
+                          functor,
+                        },
+              // Query
+              false =>  Instruction::BinaryFunctor {
+                          opcode: Operation::PutStructure,
+                          address: register_address,
+                          functor
+                        }
+            }; // end match is_program
+          self.emit_bytecode(encode_instruction(&instruction));
+          if to_assembly {
+            self.emit_assembly(&instruction, &term);
+          }
 
-                false => { // Query
-                  let instruction =
-                    Instruction::Unary {
-                      opcode: Operation::SetValue,
-                      address: *address
-                    };
-                  self.emit_bytecode(encode_instruction(&instruction));
-                  if to_assembly {
-                    self.emit_assembly(&instruction, &token);
-                  }
-                }
-
-              }
+          // Now iterate over the structure's arguments.
+          for arg in args[1..].iter(){
+            let address = arg.extract_address().unwrap();
+            instruction = cell_ref_address_matched(&address);
+            self.emit_bytecode(encode_instruction(&instruction));
+            if to_assembly {
+              self.emit_assembly(&instruction, &arg);
             }
+          }
 
-            false => {
-              // Have not seen this register before.
-              seen.insert(*address);
-              match is_program {
+        } // end is Structure ("Assignment" in [Aït-Kaci])
 
-                true  => {  // Program
-                  let instruction =
-                    Instruction::Unary {
-                      opcode: Operation::UnifyVariable,
-                      address: *address
-                    };
-                  self.emit_bytecode(encode_instruction(&instruction));
+        Cell::REF(address) => {
+          let instruction = cell_ref_address_matched(&address);
+          self.emit_bytecode(encode_instruction(&instruction));
+          if to_assembly {
+            self.emit_assembly(&instruction, &term);
+          }
+        }
 
-                  if to_assembly {
-                    self.emit_assembly(&instruction, &token);
-                  }
-                }
-
-                false => { // Query
-                  let instruction =
-                    Instruction::Unary {
-                      opcode: Operation::SetVariable,
-                      address: *address
-                    };
-                  self.emit_bytecode(encode_instruction(&instruction));
-
-                  if to_assembly {
-                    self.emit_assembly(&instruction, &token);
-                  }
-                }
-
-              } // end match is_program
-            }
-          } // end if seen address before
+        _ => {
+          unreachable!();
         }
       } // end match on token type
 
@@ -571,8 +544,8 @@ impl WVM {
     } // end if succeeded
   }
 
-  fn emit_assembly(&mut self, instruction: &Instruction, token: &Token){
-    self.assembly_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), token).as_str());
+  fn emit_assembly(&mut self, instruction: &Instruction, cell: &Cell){
+    self.assembly_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), cell).as_str());
   }
 
   /// This method only inserts bytes into `self.code`.
@@ -852,8 +825,8 @@ impl WVM {
             let f2 = self.extract_functor(b2);
             if f1 == f2{
               // Since one of `d1` and `d2` is a `Cell::STR`, they both are.
-              let v1 = self.extract_address(&c1).unwrap();
-              let v2 = self.extract_address(&c2).unwrap();
+              let v1 = c1.extract_address().unwrap();
+              let v2 = c2.extract_address().unwrap();
               for n in 1..f1.unwrap().arity{
                 pdl.push(v1 + n as usize);
                 pdl.push(v2 + n as usize);
