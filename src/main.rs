@@ -36,15 +36,34 @@ fn main() {
     rather a query partially unified with some other program.
   */
   let text = "\t?-p(Z,h(Z,W),f(W))
-  \tj(f(Y), r(X), f(P,$ Q))
-  \ty(f(Y&^), r(X), f(P, Q))
+  \tj(f(Y), r(X), f(P, Q))
+  \ty(f(Y), r(X), f(P, Q))
   \tp(f(X), h(Y, f(a)), Y)";
   println!("Input Expression: \n{}", text);
+
+  /*
+  let result = parser::parse(text);
+  match result {
+    Ok((programs, queries)) => {
+      println!("\nQueries:\n");
+      for q in queries{
+        println!("{}", q);
+      }
+      println!("Programs:\n");
+      for p in programs{
+        println!("{}", p);
+      }
+    }
+
+    Err(_) => {}
+  }
+*/
+
 
   match Compilation::compile(text, false) {
     Some(mut compilation) => {
       let mut machine = WVM::from_compilation(&mut compilation);
-      // machine.run()
+      machine.run()
     },
     None => {
       // The errors should have already been printed.

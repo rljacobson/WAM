@@ -141,7 +141,7 @@ impl<'a> Parser<'a> {
         // Eat until EOL or EOF.
         loop {
           if self.text.peek() == None {
-            local_errors.push(format!("line {}, column {} Error: Unterminated `/*`.", row, column));
+            local_errors.push(format!("Error on line {}, column {}: Unterminated `/*`.", row, column));
             return Err(local_errors);
           }
           // Gobble
@@ -220,14 +220,14 @@ impl<'a> Parser<'a> {
 
         _ => {
           let (row, column) = self.text.location();
-          local_errors.push(format!("line {}, column {} Error: Unexpected character `{}`",
+          local_errors.push(format!("Error on line {}, column {}: Unexpected character `{}`",
                                     row, column, next_char));
           Err(local_errors)
         }
       }
     } else {
       let (row, column) = self.text.location();
-      local_errors.push(format!("line {}, column {} Error: Unexpected character `{}`",
+      local_errors.push(format!("Error on line {}, column {}: Unexpected character `{}`",
                                 row, column, next_char));
       Err(local_errors)
     }
@@ -262,7 +262,13 @@ impl<'a> Parser<'a> {
         Ok(None) => {
           // Why is it None?
           if self.text.is_empty() {
-            local_errors.push(format!("Reached EOL while looking for `)`."));
+            // Is this error distinct from `incomplete argument list`?
+            let (row, column) = self.text.location();
+            local_errors.push(
+              format!(
+                "Error on line {}, column {}: Reached EOL while looking for `)`.",
+                row, column)
+            );
             return Err(local_errors);
           }
           return Ok(args);
@@ -275,7 +281,8 @@ impl<'a> Parser<'a> {
 
 
       self.text.trim_left();
-      match self.text.peek() {
+      let peek_char = self.text.peek();
+      match peek_char {
         Some(',') => {
           // Eat the `,` character.
           self.text.next();
@@ -287,8 +294,21 @@ impl<'a> Parser<'a> {
           break;
         },
 
-        _ => {
-          // Don't advance.
+        Some(unexpected) => {
+          // Expressions must be separated by a `,` in an argument list.
+          let (row, column) = self.text.location();
+          local_errors.push(
+            format!(
+              "Error on line {}, column {}: Expected `,` or `)`, but got `{}`. Inserting `,`.",
+                                    row, column, unexpected));
+        }
+
+        None => {
+          let (row, column) = self.text.location();
+          local_errors.push(
+            format!(
+              "Error on line {}, column {}: Incomplete argument list. Perhaps you are missing `)`?",
+                    row, column));
         }
       } // end match peek
     } // end while
