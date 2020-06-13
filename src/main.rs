@@ -14,15 +14,11 @@ extern crate bimap;
 mod wvm;
 mod cell;
 mod address;
-mod parser;
-mod chariter;
 mod functor;
-mod term;
 mod bytecode;
-mod compile;
+mod compiler;
 
 use crate::wvm::WVM;
-use crate::compile::Compilation;
 
 fn main() {
 
@@ -39,8 +35,18 @@ fn main() {
   \tj(f(Y), r(X), f(P, Q))
   \ty(f(Y), r(X), f(P, Q))
   \tp(f(X), h(Y, f(a)), Y)";
-  println!("Input Expression: \n{}", text);
+  println!("Input Expression: \n{}\n", text);
 
+  // High level WVM:
+  let result = WVM::from_source(text);
+  match result{
+    Some(mut machine) => {
+      machine.run();
+    }
+    None => { /**/ }
+  }
+
+  // Parser:
   /*
   let result = parser::parse(text);
   match result {
@@ -57,9 +63,10 @@ fn main() {
 
     Err(_) => {}
   }
-*/
+  */
 
-
+  // Compiler:
+  /*
   match Compilation::compile(text, false) {
     Some(mut compilation) => {
       let mut machine = WVM::from_compilation(&mut compilation);
@@ -70,9 +77,10 @@ fn main() {
       // println!("Failed to compile.")
     }
   };
+  */
 
+  // Assembly:
   /*
-
   let path = "/Users/rljacobson/Development/wam/ignore/assembly.txt";
   let assembly = std::fs::read_to_string(path).unwrap();
   // println!("File contents: \n{}\n", assembly);

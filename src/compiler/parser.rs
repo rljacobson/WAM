@@ -26,8 +26,8 @@ use std::rc::Rc;
 
 use string_cache::DefaultAtom;
 
-use crate::chariter::CharIter;
-use crate::term::{Term, TermVec};
+use super::chariter::CharIter;
+use super::term::{Term, TermVec};
 use crate::functor::{Functor, ArityType};
 
 struct Parser<'a>{

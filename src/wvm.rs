@@ -15,8 +15,8 @@ use crate::address::*;
 use crate::cell::*;
 use crate::functor::*;
 use crate::bytecode::*;
-use crate::term::*;
-use crate::compile::Compilation;
+use crate::compiler::term::*;
+use crate::compiler::Compilation;
 
 
 lazy_static! {
@@ -50,7 +50,7 @@ pub struct WVM {
   hp        : usize,     // Heap Pointer, a cursor for unification (S in [Aït-Kaci])
   rp        : usize,     // Register Pointer, a cursor for display
   ip        : usize,     // Instruction Pointer (P in [Aït-Kaci])
-  cp        : usize,     // Call/Control Pointer, the jump target for `Proceed`
+  cp        : usize,     // Continuation Pointer, the jump target for `Proceed`
   registers : Vec<Cell>, // Term registers, a memory store (X[i] in [Aït-Kaci])
 
   // Symbol table mapping line labels to their address in code memory.
@@ -142,8 +142,22 @@ impl WVM {
   // endregion
 
   // region Low-level utility methods
+  pub fn from_source(source: &str) -> Option<Self>{
+    let compile_result = Compilation::compile(source, false);
+    match compile_result {
+
+      Some(mut compilation) => {
+        Some(Self::from_compilation(&mut compilation))
+      }
+
+      None => {
+        None
+      }
+
+    }
+  }
   
-  pub fn new() -> WVM {
+  fn new() -> WVM {
     WVM {
       fail       :  false,
       query      :  true,

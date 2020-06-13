@@ -25,8 +25,8 @@ use crate::address::*;
 use crate::cell::*;
 use crate::functor::*;
 use crate::bytecode::*;
-use crate::term::*;
-use crate::parser::parse as parse_source_code;
+use super::term::*;
+use crate::compiler::parser::parse as parse_source_code;
 use crate::wvm::intern_functor;
 
 /// A `Compilation` is the result of executing `Compilation::compile(source)` and may contain
@@ -102,13 +102,13 @@ impl Compilation {
 
     self.compile_bytecode_header(to_assembly);
 
-    println!("Compiled to {} bytes of bytecode in {:?}.",
+    println!("Compiled to {} bytes of bytecode in {:?}.\n",
              self.code.len()*4, compilation_time.elapsed());
 
     #[cfg(feature = "trace_computation")]
       {
         if to_assembly {
-          println!("% Assembly Code Instructions\n{}", self.assembly_buffer);
+          println!("% Assembly Code Instructions\n{}\n", self.assembly_buffer);
         }
       }
 
@@ -321,7 +321,7 @@ impl Compilation {
 
   /// Constructs the compilation object and immediately passes
   /// control to `compile_driver`, which does the real work.
-  pub fn assemble(text: &str) -> Option<Compilation>{
+  pub fn from_assemble(text: &str) -> Option<Compilation>{
     let mut compilation = Compilation{
       code            : Vec::new(),
       labels          : Vec::new(),
@@ -408,7 +408,7 @@ impl Compilation {
         }
         self.code.push(words.low);
         self.code.push(words.high);
-      }
-    }
-  }
+      } // end match DoubleWord
+    } // end match instruction
+  } // end emit_bytecode
 }
