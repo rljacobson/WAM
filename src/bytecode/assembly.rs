@@ -39,7 +39,7 @@ use crate::address::{AddressNumberType, Address};
 use crate::bytecode::{Instruction, Operation, Word};
 use crate::functor::Functor;
 
-pub enum ParsedAssemblySyntax<'a> {
+pub enum AssemblySyntax<'a> {
   Instruction(Instruction),
   NotAnOperation{
     line: Word,
@@ -49,30 +49,39 @@ pub enum ParsedAssemblySyntax<'a> {
     line: Word,
     operation: Operation,
     args: Vec<AddressNumberType>
-  }
+  },
+  FatalParseError(nom::Err<(&'a str, nom::error::ErrorKind)>)
 }
 // Abbreviated name internally
-use ParsedAssemblySyntax as Syntax;
+use AssemblySyntax as Syntax;
 
-impl<'a> Display for ParsedAssemblySyntax<'a>{
+impl<'a> Display for AssemblySyntax<'a>{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self{
-      Syntax::Instruction(i) => {
+
+      Syntax::Instruction(i)                    => {
         write!(f, "{}", i)
       }
-      Syntax::NotAnOperation {line, name} => {
+
+      Syntax::NotAnOperation {line, name}       => {
         write!(f, "Error on line {}: {} is not an operation.", line, name)
       }
+
       Syntax::WrongArity{line, operation, args} => {
         write!(f,
           "Error on line {}: {} requires {} arguments but was given {}: ({})",
           line, operation, operation.arity(), args.len(),
-           args.iter()
-               .map(AddressNumberType::to_string)
-               .collect::<Vec<String>>()
-               .join(", ")
+          args.iter()
+              .map(AddressNumberType::to_string)
+              .collect::<Vec<String>>()
+              .join(", ")
         )
       }
+
+      Syntax::FatalParseError(error)            =>{
+        write!(f, "Error: Failed to parse assembly: {}", error)
+      }
+
     }
   }
 }
@@ -97,11 +106,14 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
   let line_number: RefCell<Word> = RefCell::new(1);
 
   let comment_p = pair(one_char('%'), is_not("\n\r"));
-  let newline_p = map(preceded(opt(tuple((space0, comment_p))),line_ending), |out| {
-    let mut line_number_ref = line_number.borrow_mut();
-    *line_number_ref = *line_number_ref + 1;
-    out
-  });
+  let newline_p = map(
+    preceded(opt(tuple((space0, comment_p))),line_ending),
+    |out| {
+      let mut line_number_ref = line_number.borrow_mut();
+      *line_number_ref        = *line_number_ref + 1;
+      out
+    }
+  );
   let maybe_wrapped_number_p = {
     map(
       alt((

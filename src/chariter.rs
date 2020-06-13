@@ -1,28 +1,32 @@
 #![allow(dead_code)]
 
 use std::str::{Chars, pattern::Pattern};
-use std::cell::{RefCell, Cell};
 use std::str::pattern::Searcher;
 
 #[derive(Debug)]
 pub struct CharIter<'d> {
-  chars     :  RefCell<Chars<'d>>,
-  next_char :  Cell<Option<char>>
+  chars      :   Chars<'d>,
+  next_char  :   Option<char>,
+  row        :  usize,
+  column     :  usize
 }
 
 impl<'d> Iterator for CharIter<'d>{
   type Item = char;
 
   fn next(&mut self) -> Option<char>{
-    let next_char_ref = self.next_char.get();
-    match next_char_ref {
+    match self.next_char {
+
       None => {
-        self.chars.borrow_mut().next()
+        let c = self.chars.next();
+        self.increment_location(c)
       },
-      _c => {
-        self.next_char.set(None);
-        _c
+
+      otherwise => {
+        self.next_char = None;
+        self.increment_location(otherwise)
       }
+
     } // end match
   } // end fn next
 }
@@ -31,40 +35,67 @@ impl<'d> CharIter<'d>{
 
   pub fn new(text: &'d str) -> Self{
     CharIter{
-      chars     : RefCell::new(text.chars()),
-      next_char : Cell::new(None)
+      chars      :  text.chars(),
+      next_char  :  None,
+      row        :  1,
+      column     :  1
     }
   }
 
-  /// Returns the next character without consuming it.
-  pub fn peek(&self) -> Option<char>{
-    let next_char_ref = self.next_char.get();
-    match next_char_ref {
+  /// Returns the next character without consuming it or incrementing row/column.
+  pub fn peek(&mut self) -> Option<char>{
+    match self.next_char {
+
       None => {
-        let mut chars_ref = self.chars.borrow_mut();
-        let c: Option<char> = chars_ref.next();
-        self.next_char.set(c);
-        c
+        self.next_char = self.chars.next();
+        self.next_char
       },
-      _c => _c
+
+      otherwise => otherwise
+
     }
   }
 
-  pub fn is_empty(&self) -> bool{
+  pub fn location(&self) -> (usize, usize) {
+    return (self.row, self.column)
+  }
+
+  /// Passes next_char through while incrementing `self.row` or `self.column` as necessary.
+  fn increment_location(&mut self, next_char: Option<char>) -> Option<char>{
+    match next_char{
+
+      Some('\n')      => {
+        self.row   += 1;
+        self.column = 0;
+        Some('\n')
+      }
+
+      Some(character) => {
+        self.column += 1;
+        Some(character)
+      }
+
+      None            => None
+
+    }
+  }
+
+  pub fn is_empty(&mut self) -> bool{
     self.peek() == None
   }
 
   /// Gives the underlying string slice.
   pub fn data(&self) -> &'d str {
-    self.chars.borrow().as_str()
+    self.chars.as_str()
   }
 
   // We include several useful methods from `std::str`.
 
   /// Determines whether or not the underlying string starts with the given pattern.
   pub fn starts_with<P, T>(&self, pat: P) -> bool
-    where P: Pattern<'d, Searcher=T>,
-    T: Searcher<'d>{
+    where P :  Pattern<'d, Searcher = T>,
+          T :  Searcher<'d>
+  {
     let text: &'d str = self.data();
     text.starts_with(pat)
   }
@@ -72,17 +103,28 @@ impl<'d> CharIter<'d>{
   /// Trims in place, unlike `str::trim_left_matches()`.
   pub fn trim_left_matches<P, T>(&mut self, pat: P)
     where P: Pattern<'d, Searcher=T>,
-          T: Searcher<'d>{
+          T: Searcher<'d>
+  {
     // We must account for the fact that the "first" `char` might be in `next_char`.
-    if let Some(next_char) = self.next_char.get(){
+    if let Some(next_char) = self.next_char{
+      // ToDo: Need yo iterate over matched chars.
+
       if next_char.is_whitespace(){
-        self.next_char.set(None);
+        self.increment_location(Some(next_char));
+        self.next_char = None;
       } else{
         // If `next_char` is not a whitespace, don't trim the beginning of `self.chars`.
         return;
       }
     }
-    self.chars = RefCell::new(self.data().trim_start_matches(pat).chars());
+    // Update the location.
+    let original = self.data();
+    let trimmed = original.trim_start_matches(pat);
+    let length = original.len() - trimmed.len();
+    self.chars = trimmed.chars();
+    for c in original[..length].chars(){
+      self.increment_location(Some(c));
+    }
   }
 
   // Trims whitespace in place, unlike `str::trim_left()`.
@@ -94,8 +136,7 @@ impl<'d> CharIter<'d>{
   /// prefix.
   //  ToDo: This would be better if it took a `std::str::Pattern`, since patterns can be
   //        constructed from predicates.
-  pub fn get_prefix_match(&mut self, pred: fn(char)->bool)
-    -> Option<&str> {
+  pub fn get_prefix_match(&mut self, pred: fn(char)->bool) -> Option<&str> {
     // We look for the index of the first character (byte) that doesn't match `pred`.
     let text = self.data();
     if let Some(end) = text.find(
@@ -104,26 +145,39 @@ impl<'d> CharIter<'d>{
       }
     ) {
       match end{
+
         0 => None,
+
         _ => {
+          for c in text[..end].chars(){
+            self.increment_location(Some(c));
+          }
           let result = Some(&text[0..end]);
           // Consume the first `end - 1` `chars` in `data`.
-          let mut chars_ref = self.chars.borrow_mut();
-          chars_ref.nth(end-1);
+          self.chars.nth(end-1);
           result
         }
+
       }
     } else {
       // All `char`s match predicate. Empty `self.chars` and return entire string.
       let result = self.data();
+      // ToDo: Why can't I say, `for c in self`?
+      loop {
+        let c = self.next();
+        if c == None { break; }
+        self.increment_location(c);
+      }
       // If the original string was empty, then all `char`s in the string match.
       match result.is_empty(){
+
         true => None,
+
         false => {
-          let mut chars_ref = self.chars.borrow_mut();
-          *chars_ref = "".chars(); // empty<char>() isn't a Char.
+          self.chars = "".chars(); // empty<char>() isn't a Char.
           Some(result)
         }
+
       } // end match `result.is_empty`
     } // end else (All `char`s matched)
   }

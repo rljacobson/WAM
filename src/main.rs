@@ -19,8 +19,10 @@ mod chariter;
 mod functor;
 mod term;
 mod bytecode;
+mod compile;
 
 use crate::wvm::WVM;
+use crate::compile::Compilation;
 
 fn main() {
 
@@ -34,13 +36,22 @@ fn main() {
     rather a query partially unified with some other program.
   */
   let text = "\t?-p(Z,h(Z,W),f(W))
-  \tj(f(Y), r(X), f(P, Q))
-  \ty(f(Y), r(X), f(P, Q))
+  \tj(f(Y), r(X), f(P,$ Q))
+  \ty(f(Y&^), r(X), f(P, Q))
   \tp(f(X), h(Y, f(a)), Y)";
   println!("Input Expression: \n{}", text);
 
-  let mut machine = WVM::new();
-  machine.compile(text, true, true);
+  match Compilation::compile(text, false) {
+    Some(mut compilation) => {
+      let mut machine = WVM::from_compilation(&mut compilation);
+      // machine.run()
+    },
+    None => {
+      // The errors should have already been printed.
+      // println!("Failed to compile.")
+    }
+  };
+
   /*
 
   let path = "/Users/rljacobson/Development/wam/ignore/assembly.txt";

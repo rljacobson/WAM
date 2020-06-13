@@ -22,7 +22,6 @@ variant. Constants are represented as a structure with a zero-length argument li
 
 */
 
-use std::cell::RefCell;
 use std::rc::Rc;
 
 use string_cache::DefaultAtom;
@@ -31,225 +30,273 @@ use crate::chariter::CharIter;
 use crate::term::{Term, TermVec};
 use crate::functor::{Functor, ArityType};
 
-
-/// Parses text to produce abstract syntax trees made of `Term`s.
-/// Returns a tuple (atoms, queries).
-pub fn parse<'b>(input: &'b str) -> (TermVec, TermVec){
-  // For M_1, all atoms are facts.
-  let mut atoms   :  TermVec = Vec::new();
-  let mut queries :  TermVec = Vec::new();
-
-
-  if input.is_empty() {
-    panic!("Input is empty!")
-  }
-
-  // We need multiple mutable borrows for recursive calls to parsing functions.
-  let text_ref: Box<RefCell<CharIter>> =
-    Box::new(
-      RefCell::new(
-        CharIter::<'b>::new(input)
-      )
-    );
-
-
-  loop {
-    let atom = parse_aux(&text_ref).unwrap();
-    if let Term::Query(term) = atom {
-      queries.push(Rc::try_unwrap(term).unwrap());
-    } else {
-      atoms.push(atom);
-    }
-    let mut text = RefCell::borrow_mut(&*text_ref);
-
-    // Allow trailing whitespace, but nothing more.
-    text.trim_left();
-    if text.is_empty() {
-      break;
-    }
-  } // end loop
-
-  (atoms, queries)
+struct Parser<'a>{
+  text   : CharIter<'a>,
+  errors : Vec<String>
 }
 
 
-fn parse_aux(text_ref: &RefCell<CharIter>) -> Option<Term> {
-  let mut text = text_ref.borrow_mut();
-  let mut next_char: char;
+/// Parses text to produce abstract syntax trees made of `Term`s.
+/// Returns a tuple (atoms, queries).
+pub fn parse(input: &str) -> Result<(TermVec, TermVec), ()> {
+  let mut parser = Parser::new(input);
 
-  // Handle Comments, which require resetting `next_char`.
-  loop {
-    text.trim_left();
-    match text.next(){
-      Some(c) => {
-        next_char = c;
-      },
-      None => {
-        return None;
-      }
+  parser.parse()
+}
+
+impl<'a> Parser<'a> {
+
+  pub fn new(input: &'a str) -> Self{
+    Parser{
+      text: CharIter::new(input),
+      errors: vec![]
+    }
+  }
+
+  /// Parses text to produce abstract syntax trees made of `Term`s.
+  /// Returns a tuple (atoms, queries).
+  pub fn parse(&mut self) -> Result<(TermVec, TermVec), ()> {
+    // For M_1, all atoms are facts.
+    let mut atoms   :  TermVec  = Vec::new();
+    let mut queries :  TermVec  = Vec::new();
+    let mut success :  bool     = true;
+
+    if self.text.is_empty() {
+      eprintln!("Input is empty.");
+      return Err(());
     }
 
-    // Single-line comments
-    if next_char == '%' {
-      // Eat until EOL or EOF.
-      while text.peek() != None && text.next() != Some('\n'){
-        // Gobble
-      }
-    }
-    // In-line comments
-    else if next_char == '/' && text.peek() == Some('*'){
-      text.next();
-      // Eat until EOL or EOF.
-      while text.peek() != None {
-        // Gobble
-        next_char = text.next().unwrap();
-        if next_char == '*' && text.peek() == Some('/'){
-          text.next();
-          // Break inner while-loop, reset `next_char`
+    loop {
+      let parse_result = self.parse_aux();
+      match parse_result {
+        Ok(Some(Term::Query(term))) => {
+          queries.push(Rc::try_unwrap(term).unwrap());
+        }
+
+        Ok(Some(term)) => {
+          atoms.push(term);
+        }
+
+        Err(errors) => {
+          for error in errors{
+            eprintln!("{}", error);
+          }
+          // We keep attempting to parse to accumulate all errors.
+          success = false;
+        }
+
+        Ok(None) => {
+          // Empty
+          success = false;
           break;
         }
+      };
+
+      // Allow trailing whitespace, but nothing more.
+      self.text.trim_left();
+      if self.text.is_empty() {
+        break;
       }
-    } else {
-      // Not a comment, break outer loop.
-      break;
+    } // end loop
+
+    match success {
+      true => Ok((atoms, queries)),
+      false => {
+        for error in &self.errors{
+          eprintln!("{}", error);
+        }
+        Err(())
+      }
     }
+  }
 
-    //reset `next_char` at the top of the loop.
-  } // end comment loop
 
-  // A giant string of if-else's //
+  fn parse_aux(&mut self) -> Result<Option<Term>, Vec<String>> {
+    let mut next_char    :  char;
+    let mut local_errors :  Vec<String>  = Vec::new();
 
-  if next_char.is_lowercase(){
-    // Functor Structure //
-    // Get the rest of the functor's name
-    let name =
-      match  text.get_prefix_match(char::is_alphanumeric){
+    // Handle Comments, which require resetting `next_char`.
+    loop {
+      self.text.trim_left();
+      match self.text.next() {
+        Some(c) => {
+          next_char = c;
+        },
+        None => {
+          return Ok(None);
+        }
+      }
 
+      // Single-line comments
+      if next_char == '%' {
+        // Eat until EOL or EOF.
+        while self.text.peek() != None && self.text.next() != Some('\n') {
+          // Gobble
+        }
+      }
+      // In-line comments
+      else if next_char == '/' && self.text.peek() == Some('*') {
+        let (row, column) = self.text.location();
+        self.text.next();
+        // Eat until EOL or EOF.
+        loop {
+          if self.text.peek() == None {
+            local_errors.push(format!("line {}, column {} Error: Unterminated `/*`.", row, column));
+            return Err(local_errors);
+          }
+          // Gobble
+          next_char = self.text.next().unwrap();
+          if next_char == '*' && self.text.peek() == Some('/') {
+            self.text.next();
+            // Break inner while-loop, reset `next_char`
+            break;
+          }
+        }
+      } else {
+        // Not a comment, break outer loop.
+        break;
+      }
+
+      //reset `next_char` at the top of the loop.
+    } // end comment loop
+
+    // A giant string of if-else's //
+
+    if next_char.is_lowercase() {
+      // Functor Structure //
+      // Get the rest of the functor's name
+      let name = match self.text.get_prefix_match(char::is_alphanumeric) {
         Some(rest) => DefaultAtom::from(
           format!("{}{}", next_char, rest)
         ),
 
         None => DefaultAtom::from(next_char.to_string())
+      };
 
-    };
+      match self.parse_arg_list(){
 
-    // `parse_arg_list` needs mutable access to the `CharIter`.
-    drop(text);
-    let args = parse_arg_list(text_ref);
+        Ok(args) => {
+          Ok(Some(Term::Structure {
+            functor: Functor { name, arity: args.len() as ArityType },
+            args
+          }))
+        }
 
-    Some(Term::Structure {
-      functor: Functor{name, arity: args.len() as ArityType},
-      args
-    })
-  }
+        Err(errors) => Err(errors)
 
-  else if next_char == ',' || next_char == ')' {
-    // The assumption here is that `parse_aux` was called recursively, and the current term has
-    // been completely parsed.
-    None
-  }
+      }
 
-  else if next_char.is_uppercase(){
-    // A variable. Get the rest of the name.
-    let name =
-      match  text.get_prefix_match(char::is_alphanumeric){
-
-        Some(rest)  => DefaultAtom::from(
+    }
+    else if next_char == ',' || next_char == ')' {
+      // The assumption here is that `parse_aux` was called recursively, and the current term has
+      // been completely parsed.
+      Ok(None)
+    }
+    else if next_char.is_uppercase() {
+      // A variable. Get the rest of the name.
+      let name = match self.text.get_prefix_match(char::is_alphanumeric) {
+        Some(rest) => DefaultAtom::from(
           format!("{}{}", next_char, rest)
         ),
 
         None => DefaultAtom::from(next_char.to_string())
-
       };
-    Some(Term::Variable(name))
+      Ok(Some(Term::Variable(name)))
+    }
+    else if next_char == '?' {
+      // Note: There is no equivalent case for `Term::Program`. Every non-query is a program.
+      match self.text.next() {
+
+        Some('-') => {
+          let term_option = self.parse_aux();
+          match term_option {
+
+            Ok(Some(term)) => Ok(Some(Term::Query(Rc::new(term)))),
+
+            otherwise => otherwise,
+
+          }
+        }
+
+        _ => {
+          let (row, column) = self.text.location();
+          local_errors.push(format!("line {}, column {} Error: Unexpected character `{}`",
+                                    row, column, next_char));
+          Err(local_errors)
+        }
+      }
+    } else {
+      let (row, column) = self.text.location();
+      local_errors.push(format!("line {}, column {} Error: Unexpected character `{}`",
+                                row, column, next_char));
+      Err(local_errors)
+    }
   }
 
-  else if next_char == '?' {
-    // Note: There is no equivalent case for `Term::Program`. Every non-query is a program.
-    match text.next() {
+  /**
+  Parses a comma separated list of terms and returns them in a vector. As functors can have zero
+  arguments (constants), the vector returned may be empty.
+*/ fn parse_arg_list(&mut self) -> Result<TermVec, Vec<String>> {
+    let mut args         :  TermVec      = Vec::new();
+    let mut local_errors :  Vec<String>  = Vec::new();
 
-      Some('-') => {
-        // `parse_aux` needs a mutable borrow of text, so drop this one.
-        drop(text);
-        let term_option = parse_aux(text_ref);
-        match term_option {
 
-          Some(term) => Some(Term::Query(Rc::new(term))),
+    self.text.trim_left();
+    if let Some(c) = self.text.peek() {
+      if c != '(' {
+        // Constants can omit parentheses, as they have no arguments.
+        return Ok(args);
+      } else {
+        // Eat `(`
+        self.text.next();
+      }
+    }
 
-          None       => None
+    loop {
+      match self.parse_aux(){
 
+        Ok(Some(term)) => {
+          args.push(term);
+        }
+
+        Ok(None) => {
+          // Why is it None?
+          if self.text.is_empty() {
+            local_errors.push(format!("Reached EOL while looking for `)`."));
+            return Err(local_errors);
+          }
+          return Ok(args);
+        }
+
+        Err(mut msg) => {
+          local_errors.append(&mut msg);
         }
       }
 
-      _ => {
-        eprintln!("Error: Unexpected character `{}`", next_char);
-        panic!();
-      }
 
+      self.text.trim_left();
+      match self.text.peek() {
+        Some(',') => {
+          // Eat the `,` character.
+          self.text.next();
+        },
+
+        Some(')') => {
+          // Eat the `)` character and return.
+          self.text.next();
+          break;
+        },
+
+        _ => {
+          // Don't advance.
+        }
+      } // end match peek
+    } // end while
+
+    match local_errors.is_empty(){
+      true => Ok(args),
+      false => Err(local_errors)
     }
+
   }
-
-  else {
-    eprintln!("Error: Unexpected character `{}`", next_char);
-    panic!();
-  }
-}
-
-/**
-  Parses a comma separated list of terms and returns them in a vector. As functors can have zero
-  arguments (constants), the vector returned may be empty.
-*/
-fn parse_arg_list(text_ref: &RefCell<CharIter>) -> TermVec {
-  let mut args: TermVec = Vec::new();
-  let mut text = text_ref.borrow_mut();
-
-  text.trim_left();
-  if let Some(c) = text.peek(){
-    if c != '(' {
-      // Constants can omit parentheses, as they have no arguments.
-      return args;
-    } else {
-      // Eat `(`
-      text.next();
-    }
-  }
-
-  let mut term_option: Option<Term>;
-
-  loop {
-    // `parse_aux` needs a mutable borrow of text, so drop this one.
-    drop(text);
-    term_option = parse_aux(text_ref);
-    text = text_ref.borrow_mut();
-    if text.is_empty(){
-      eprintln!("Reached EOL while looking for `)`.");
-      panic!();
-    }
-    if term_option != None {
-      args.push(term_option.unwrap());
-    } else {
-      return args;
-    }
-
-    text.trim_left();
-    match text.peek(){
-
-      Some(',') => {
-        // Eat the `,` character.
-        text.next();
-      },
-
-      Some(')') => {
-        // Eat the `)` character and return.
-        text.next();
-        break;
-      },
-
-      _ => {
-        // Don't advance.
-      }
-
-    } // end match peek
-  } // end while
-  args
 }

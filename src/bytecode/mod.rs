@@ -26,7 +26,7 @@
 
 */
 
-pub use assembly::{parse_assembly, ParsedAssemblySyntax};
+pub use assembly::{parse_assembly, AssemblySyntax};
 pub use binary::{encode_instruction, Bytecode, is_double_word_instruction,
                  try_decode_instruction, TwoWords, Word};
 pub use instruction::{Instruction, Operation};
