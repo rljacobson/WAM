@@ -52,7 +52,7 @@ impl Compilation {
 
     let result = compilation.compile_driver(text, to_assembly);
     match result {
-      Ok(_) => Some(compilation),
+      Ok(_)  => Some(compilation),
       Err(_) => None
     }
   }
@@ -137,9 +137,10 @@ impl Compilation {
     new_encoded.extend(
       self.labels.iter().map(
         |(f, a)| {
+          let address: Address = *a + (offset as AddressNumberType);
           let instruction = Instruction::Unary {
             opcode: Operation::Call,
-            address: *a + (offset as AddressNumberType),
+            argument: Argument::Address(address),
           };
           if to_assembly {
             new_assembly.push_str(
@@ -195,21 +196,21 @@ impl Compilation {
     let seen: RefCell<HashSet<Address>> = RefCell::new(HashSet::with_capacity(order.len()));
 
     // A helpful auxiliary so we don't have to repeat ourselves, capturing `is_program` and `seen`
-    let cell_ref_address_matched = |address: &Address| -> Instruction{
+    let match_address_to_instruction = |address: &Address| -> Instruction{
       let was_seen = seen.borrow().contains(&address);
       match was_seen {
         true  => {
           // Already saw this register.
           match is_program {
             // Program
-            true  =>  Instruction::Unary {
-              opcode: Operation::UnifyValue,
-              address: *address
+            true     => Instruction::Unary {
+              opcode  : Operation::UnifyValue,
+              argument: Argument::Address(*address)
             },
             // Query
-            false =>  Instruction::Unary {
-              opcode: Operation::SetValue,
-              address: *address
+            false   =>  Instruction::Unary {
+              opcode  : Operation::SetValue,
+              argument: Argument::Address(*address)
             }
           }
         }
@@ -219,14 +220,14 @@ impl Compilation {
           seen.borrow_mut().insert(*address);
           match is_program {
             // Program
-            true  =>  Instruction::Unary {
-              opcode: Operation::UnifyVariable,
-              address: *address
+            true     => Instruction::Unary {
+              opcode  : Operation::UnifyVariable,
+              argument: Argument::Address(*address)
             },
             // Query
-            false =>  Instruction::Unary {
-              opcode: Operation::SetVariable,
-              address: *address
+            false    => Instruction::Unary {
+              opcode  : Operation::SetVariable,
+              argument: Argument::Address(*address)
             }
           } // end match is_program
         }
@@ -237,7 +238,7 @@ impl Compilation {
     // instruction we are about to push onto `self.code` will be the first instruction of
     // `procedure`. No checking is done to see if there already is a procedure with this name.
     let procedure_address = Address::Code(self.code.len() as AddressNumberType);
-    let functor = cell_vec[order[0]].extract_functor().unwrap();
+    let functor: Functor  = cell_vec[order[0]].extract_functor().unwrap();
     // The first cell is guaranteed to be a `Cell::Structure`, so `unwrap()` is safe.
     self.labels.push((functor.clone(), procedure_address));
 
@@ -254,8 +255,8 @@ impl Compilation {
       match &term {
 
         Cell::Structure(args) => {
-          let register_address = Address::from_reg_idx(index);
-          let functor = term.extract_functor().unwrap();
+          let register_address  = Address::from_reg_idx(index);
+          let functor: Functor  = term.extract_functor().unwrap();
           // Record functor so its name can be reconstituted from bytecode.
           intern_functor(&functor);
           seen.borrow_mut().insert(register_address);
@@ -263,40 +264,43 @@ impl Compilation {
           let mut instruction =
             match is_program {
               // Program
-              true  =>  Instruction::BinaryFunctor {
-                opcode: Operation::GetStructure,
-                address: register_address,
-                functor,
+              true     => Instruction::Binary {
+                opcode  : Operation::GetStructure,
+                address : register_address,
+                argument: Argument::Functor(functor)
               },
               // Query
-              false =>  Instruction::BinaryFunctor {
-                opcode: Operation::PutStructure,
-                address: register_address,
-                functor
+              false    => Instruction::Binary {
+                opcode  : Operation::PutStructure,
+                address : register_address,
+                argument: Argument::Functor(functor)
               }
             }; // end match is_program
-          self.emit_bytecode(encode_instruction(&instruction));
+          let encoded_instruction = encode_instruction(&instruction);
+          self.emit_bytecode(encoded_instruction);
           if to_assembly {
-            self.emit_assembly(&instruction, &term);
+            self.emit_assembly(&instruction, &term, &encoded_instruction);
           }
 
           // Now iterate over the structure's arguments.
           for arg in args[1..].iter(){
             let address = arg.extract_address().unwrap();
-            instruction = cell_ref_address_matched(&address);
-            self.emit_bytecode(encode_instruction(&instruction));
+            instruction = match_address_to_instruction(&address);
+            let encoded_instruction = encode_instruction(&instruction);
+            self.emit_bytecode(encoded_instruction);
             if to_assembly {
-              self.emit_assembly(&instruction, &arg);
+              self.emit_assembly(&instruction, &term, &encoded_instruction);
             }
           }
 
         } // end is Structure ("Assignment" in [Aït-Kaci])
 
         Cell::REF(address) => {
-          let instruction = cell_ref_address_matched(&address);
-          self.emit_bytecode(encode_instruction(&instruction));
+          let instruction = match_address_to_instruction(&address);
+          let encoded_instruction = encode_instruction(&instruction);
+          self.emit_bytecode(encoded_instruction);
           if to_assembly {
-            self.emit_assembly(&instruction, &term);
+            self.emit_assembly(&instruction, &term, &encoded_instruction);
           }
         }
 
@@ -309,12 +313,15 @@ impl Compilation {
 
     // For now, we end query construction with a `Proceed` as well.
     let instruction = Instruction::Nullary(Operation::Proceed);
-    self.emit_bytecode(encode_instruction(&instruction));
+    let encoded_instruction = encode_instruction(&instruction);
+    self.emit_bytecode(encoded_instruction);
     if to_assembly {
-      self.assembly_buffer.push_str(format!(
-        "{:30}%   End of atom\n",
-        format!("{}", instruction)
-      ).as_str());
+      self.assembly_buffer.push_str(
+        format!("{:30}% {:>11} End of atom\n",
+                format!("{}", instruction),
+                format!("{}", encoded_instruction),
+        ).as_str()
+      );
     }
 
   }
@@ -330,11 +337,9 @@ impl Compilation {
 
     match compilation.assembler_driver(text) {
 
-      Ok(())      => Some(compilation),
+      Ok(())  => Some(compilation),
 
-      Err(()) => {
-        None
-      }
+      Err(()) => None
 
     }
 
@@ -356,7 +361,7 @@ impl Compilation {
                             };
 
     let mut instructions: Vec<Instruction> = Vec::with_capacity(assembly.len());
-    let mut success: bool = true;
+    let mut success     : bool             = true;
 
     for syntax in assembly {
       match syntax {
@@ -389,8 +394,15 @@ impl Compilation {
     }
   }
 
-  fn emit_assembly(&mut self, instruction: &Instruction, cell: &Cell){
-    self.assembly_buffer.push_str(format!("{:30}%   {}\n", format!("{}", instruction), cell).as_str());
+  fn emit_assembly(&mut self, instruction: &Instruction, _cell: &Cell,
+                   encoded_instruction: &Bytecode){
+    self.assembly_buffer.push_str(
+      format!("{:30}% {:>11}\n",
+              format!("{}", instruction),
+              format!("{}", encoded_instruction),
+              // cell,
+      ).as_str()
+    );
   }
 
   /// This method only inserts bytes into `self.code`.

@@ -5,7 +5,7 @@ use std::fmt::{Display, Formatter};
 use strum_macros::{Display as StrumDisplay, IntoStaticStr};
 use num_enum::{TryFromPrimitive, IntoPrimitive};
 
-use crate::address::{Address};
+use crate::address::Address;
 use crate::functor::Functor;
 use crate::bytecode::Word;
 // pub use assembly::parse_assembly;
@@ -67,29 +67,45 @@ pub enum Operation {
 
 }
 
-pub const MAX_BINARY_OPCODE: u8 = 12u8;
-pub const MAX_DOUBLE_WORD_OPCODE: u8 = 6u8;
-pub const MAX_FUNCTOR_OPCODE: u8 = 2u8;
+pub const MAX_UNARY_OPCODE       :  Word  = 12;
+pub const MAX_DOUBLE_WORD_OPCODE :  Word  = 6;
+pub const MAX_FUNCTOR_OPCODE     :  Word  = 2;
+
+#[derive(Clone, Debug, Eq, PartialEq, Hash)]
+pub enum Argument{
+  Address(Address),
+  Word(Word),
+  Functor(Functor)
+}
+
+impl Display for Argument{
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self{
+
+      Argument::Address(address) => write!{f, "{}", address},
+
+      Argument::Word(word)       => write!{f, "{}", word   },
+
+      Argument::Functor(functor) => write!{f, "{}", functor}
+
+    }
+  }
+}
 
 /// Holds the unencoded components of an instruction. As such, it enumerates the possible
 /// instruction argument combinations.
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Instruction {
   /// [OpCode:8][Address:24][Address:24][Reserved:8]
-  BinaryFunctor{
+  Binary{
     opcode   :  Operation,
     address  :  Address,
-    functor  :  Functor
-  },
-  Binary {
-    opcode: Operation,
-    address1: Address,
-    address2: Address
+    argument :  Argument
   },
   /// [OpCode:8][Address:24]
   Unary {
-    opcode: Operation,
-    address: Address
+    opcode   :  Operation,
+    argument :  Argument
   },
   /// [OpCode:8][Reserved:24]
   Nullary(Operation),
@@ -99,29 +115,31 @@ impl Display for Instruction {
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self{
 
-      Instruction::BinaryFunctor{opcode, address, functor} => {
-        write!(f, "{}({}, {})", opcode, functor, address)
+      Instruction::Binary{opcode, address, argument: Argument::Functor(functor) } => {
+      write!(f, "{}({}, {})", opcode, functor, address)
       }
 
-      Instruction::Binary{opcode, address1, address2 } => {
-        write!(f, "{}({}, {})", opcode, address1, address2)
+      Instruction::Binary{opcode, address, argument: Argument::Address(address2) } => {
+      write!(f, "{}({}, {})", opcode, address, address2)
       }
 
-      Instruction::Unary { opcode, address} => {
-        write!(f, "{}({})", opcode, address)
+      Instruction::Unary { opcode, argument}          => {
+        write!(f, "{}({})", opcode, argument)
       }
 
-      Instruction::Nullary(opcode) => {
+      Instruction::Nullary(opcode)                    => {
         write!(f, "{}", opcode)
       }
 
+      _ => { unreachable!() }
     }
   }
 }
 
 impl Operation{
-  pub fn code(&self) -> u8 {
-    Into::<u8>::into(*self)
+  pub fn code(&self) -> Word {
+    Into::<u8>::into(*self) as Word
+    // Into::<u8>::into(*self)
   }
 
   pub fn is_functor(&self) -> bool {
@@ -131,8 +149,8 @@ impl Operation{
   pub fn arity(&self) -> Word {
     match self.code() {
       value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
-      value if value < MAX_BINARY_OPCODE => 1,
-      _value => 0
+      value if value < MAX_UNARY_OPCODE        => 1,
+      _value                                   => 0
     }
   }
 }

@@ -43,8 +43,9 @@ pub struct WVM {
   mode  : Mode, // In Write mode, new elements are built on the heap.
 
   // Memory Stores
-  heap : Vec<Cell>, // Data memory store ("global stack" in [Warren])
-  code : Vec<Word>,  // Code memory, a binary memory store
+  heap  : Vec<Cell>, // Data memory store ("global stack" in [Warren])
+  code  : Vec<Word>, // Code memory, a binary memory store
+  stack : Vec<Cell>, // Environment stack.
 
   // Registers //
   hp        : usize,     // Heap Pointer, a cursor for unification (S in [Aït-Kaci])
@@ -166,13 +167,14 @@ impl WVM {
       heap       :  vec![],
       code       :  vec![],
       registers  :  vec![],
+      stack      :  vec![],
 
       hp         :  0,
       rp         :  0,
       ip         :  0,
       cp         :  0,
 
-      labels     :  Vec::new(),
+      labels         :  Vec::new(),
       assembly_buffer:  String::new(),
     }
   }
@@ -180,8 +182,8 @@ impl WVM {
   /// Constructs a new WVM object inilialized with the given `Compilation`
   pub fn from_compilation(compilation: &mut Compilation) -> Self {
     let mut new_vm = WVM::new();
-    std::mem::swap(&mut new_vm.code, &mut compilation.code);
-    std::mem::swap(&mut new_vm.labels, &mut compilation.labels);
+    std::mem::swap(&mut new_vm.code,            &mut compilation.code           );
+    std::mem::swap(&mut new_vm.labels,          &mut compilation.labels         );
     std::mem::swap(&mut new_vm.assembly_buffer, &mut compilation.assembly_buffer);
     new_vm
   }
@@ -203,12 +205,12 @@ impl WVM {
   fn value_at(&self, ptr: &Address) -> Cell{
     match ptr {
 
-      Address::Heap(_) => self.heap[ptr.idx()].clone(),
+      Address::Heap(_)      => self.heap[ptr.idx()].clone(),
 
-      Address::Register(_) => self.registers[ptr.idx()].clone(),
+      Address::Register(_)  => self.registers[ptr.idx()].clone(),
 
       | Address::Functor(_)
-      | Address::Code(_) => {
+      | Address::Code(_)    => {
         eprintln!("Tried to use `value_at()` with a code address: {}", ptr);
         panic!();
       }
@@ -232,7 +234,7 @@ impl WVM {
         self.registers[address.idx()] = cell.clone();
       },
 
-      Address::Heap(_) => {
+      Address::Heap(_)      => {
         if address.idx() >= self.heap.len() {
           self.heap.resize(address.idx() + 1, Cell::Empty);
         }
@@ -240,7 +242,7 @@ impl WVM {
       },
 
       | Address::Functor(_)
-      | Address::Code(_) => {
+      | Address::Code(_)    => {
         eprintln!("Error: Tried to use `set_value_at()` with a code address. Ignoring.");
       }
 
@@ -595,6 +597,14 @@ impl WVM {
     self.ip = address.idx();
   }
 
+  fn allocate(&mut self, _size: Word){
+
+  }
+
+  fn deallocate(&mut self){
+
+  }
+
   /// Marks the end of a procedure and jumps to the address stored in `self.cp`.
   fn proceed(&mut self){
     #[cfg(feature = "trace_computation")] println!("Proceed");
@@ -739,7 +749,7 @@ impl WVM {
           3. to increment `self.ip` according to the number of words in the instruction.
       */
 
-      Instruction::BinaryFunctor { opcode, address, functor } => {
+      Instruction::Binary { opcode, address, argument: Argument::Functor(functor) } => {
         match opcode {
           PutStructure => { self.put_structure(functor, address);}
           GetStructure => { self.get_structure(functor, address);}
@@ -748,23 +758,29 @@ impl WVM {
         // Update the register pointer. This is used for display, to point to the active register.
         self.rp = address.idx();
       }
-      Instruction::Binary { opcode, address1, address2 } => {
+      Instruction::Binary { opcode, address, argument: Argument::Address(address2) } => {
         match opcode {
-          PutVariable => { self.put_variable(address1, address2);}
-          GetVariable => { self.get_variable(address1, address2);}
-          PutValue    => { self.put_value(address1, address2);   }
-          GetValue    => { self.get_value(address1, address2);   }
+          PutVariable => { self.put_variable(address, address2);}
+          GetVariable => { self.get_variable(address, address2);}
+          PutValue    => { self.put_value(address, address2);   }
+          GetValue    => { self.get_value(address, address2);   }
           _           => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
-      Instruction::Unary { opcode, address } => {
+      Instruction::Unary { opcode, argument: Argument::Address(address) } => {
         match opcode {
           SetVariable   => { self.set_variable(address);  }
           SetValue      => { self.set_value(address);     }
           UnifyVariable => { self.unify_variable(address);}
           UnifyValue    => { self.unify_value(address);   }
           Call          => { self.call(address);          }
-          _             => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+          _             => { unreachable ! ("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+        }
+      }
+      Instruction::Unary { opcode, argument: Argument::Word(word) } => {
+        match opcode {
+          Allocate => { self.allocate(*word);             }
+          _        => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
       Instruction::Nullary(opcode) => {
@@ -773,6 +789,9 @@ impl WVM {
           Halt    => { self.halt();  }
           _       => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
+      }
+      _ => {
+        unreachable!("Error: The instruction decoded as {} is invalid.", instruction);
       }
     }
   }

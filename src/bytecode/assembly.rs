@@ -36,7 +36,7 @@ use nom::{
 };
 
 use crate::address::{AddressNumberType, Address};
-use crate::bytecode::{Instruction, Operation, Word};
+use crate::bytecode::{Instruction, Operation, Word, Argument};
 use crate::functor::Functor;
 
 pub enum AssemblySyntax<'a> {
@@ -181,10 +181,10 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
                 let opcode_result = Operation::from_str(out.0);
                 match opcode_result {
                   Ok(operation) if operation.is_functor() =>
-                    Syntax::Instruction(Instruction::BinaryFunctor {
+                    Syntax::Instruction(Instruction::Binary {
                       opcode: operation,
-                      functor: parse_functor((out.1).0),
                       address: parse_address((out.1).1[0]),
+                      argument: Argument::Functor(parse_functor((out.1).0)),
                     }),
                   Ok(operation) if operation.arity() !=2 => {
                     Syntax::WrongArity {
@@ -199,8 +199,8 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
                   Ok(operation) =>
                     Syntax::Instruction(Instruction::Binary {
                       opcode: operation,
-                      address1: parse_address((out.1).0[0]),
-                      address2: parse_address((out.1).1[1]),
+                      address: parse_address((out.1).0[0]),
+                      argument: Argument::Address(parse_address((out.1).1[1])),
                     }),
                   _e => {
                     Syntax::NotAnOperation {
@@ -218,13 +218,13 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
                     let idx = out.1.parse::<AddressNumberType>().unwrap();
                     Syntax::Instruction(Instruction::Unary {
                       opcode: Operation::Call,
-                      address: Address::Code(idx),
+                      argument: Argument::Address(Address::Code(idx)),
                     })
                   },
                   Ok(operation) if operation.arity() == 1 => {
                     Syntax::Instruction(Instruction::Unary {
                       opcode: operation,
-                      address: parse_address(out.1),
+                      argument: Argument::Address(parse_address(out.1)),
                     })
                   },
                   Ok(operation) => {

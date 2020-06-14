@@ -4,15 +4,17 @@
 */
 
 use std::convert::TryFrom;
+use std::fmt::{Display, Formatter};
 
 use string_cache::DefaultAtom;
 
 use crate::address::Address;
 use crate::functor::{Functor, ArityType};
-use super::{Operation, Instruction};
+use super::{Operation, Instruction, Argument};
 // ToDo: This dependency is frustrating. Can it be removed?
 use crate::wvm::{intern_functor, try_get_interned_functor};
-use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_BINARY_OPCODE, MAX_FUNCTOR_OPCODE};
+use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_UNARY_OPCODE, MAX_FUNCTOR_OPCODE};
+
 
 // If you change this you must also change `encode_instruction` and `decode_instruction`.
 pub type Word = u32;
@@ -24,8 +26,8 @@ pub type Word = u32;
 */
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub struct TwoWords {
-  pub low: Word,
-  pub high: Word
+  pub low  : Word,
+  pub high : Word
 }
 
 /// An `Either` type for an encoded instruction, allowing the instruction to be
@@ -36,6 +38,15 @@ pub enum Bytecode {
   DoubleWord(TwoWords)
 }
 
+impl Display for Bytecode{
+  fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+    match self{
+      Bytecode::Word(word)         => write!(f, "0x{:0>4X}", word),
+      Bytecode::DoubleWord(double) => write!(f, "0x{:0>5X}{:0>4X}", double.high, double.low)
+    }
+
+  }
+}
 
 pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
   let mut bytecode = TwoWords{ low: 0, high: 0 };
@@ -44,51 +55,52 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
     Bytecode::DoubleWord(tw) => { bytecode = *tw; }
   }
 
-  let opcode =
+  let opcode: Operation =
     match Operation::try_from((bytecode.low & 0xFF) as u8) {
 
-      Ok(v)   => Some(v),
+      Ok(oc)  => oc,
 
-      Err(_e) => None // ToDo: panic!("{}", e);
+      Err(_e) => { return None; }
 
     };
-  if opcode == None{
-    return None;
-  }
 
-  let opcode = opcode.unwrap();
-  let opcode_value = Into::<u8>::into(opcode);
-
-  let instruction =
-    // = the value of the following giant if statement:
-  if opcode_value < MAX_FUNCTOR_OPCODE {
+  let instruction = // = the value of the following giant if statement:
+  if opcode.code() < MAX_FUNCTOR_OPCODE {
     // [OpCode:8][Address:24][Name:16][Arity:16]
-    Instruction::BinaryFunctor {
+    Instruction::Binary {
       opcode,
-      address: Address::from_reg_idx( (bytecode.low >> 8) as usize),
-      functor: decode_functor(&bytecode.high),
+      address : Address::from_reg_idx( (bytecode.low >> 8) as usize),
+      argument: Argument::Functor(decode_functor(&bytecode.high)),
     }
   }
 
-  else if opcode_value < MAX_DOUBLE_WORD_OPCODE {
+  else if opcode.code() < MAX_DOUBLE_WORD_OPCODE {
     // [OpCode:8][Address:24][Address:24][Reserved:8]
     Instruction::Binary {
       opcode,
-      address1: Address::from_heap_idx((bytecode.low >> 8) as usize),
-      address2: Address::from_reg_idx(bytecode.high as usize)
+      address : Address::from_heap_idx((bytecode.low >> 8) as usize),
+      argument: Argument::Address(Address::from_reg_idx(bytecode.high as usize))
     }
   }
 
-  else if opcode_value < MAX_BINARY_OPCODE {
+  else if opcode.code() < MAX_UNARY_OPCODE {
     // [OpCode:8][Address:24]
-    let address =
+    let argument =
       match opcode {
-        Operation::Call => Address::from_code_idx((bytecode.low >> 8) as usize),
-        _ => Address::from_reg_idx((bytecode.low >> 8) as usize)
+
+        Operation::Allocate => Argument::Word(bytecode.low >> 8),
+
+        Operation::Call     => {
+          Argument::Address(Address::from_code_idx((bytecode.low >> 8) as usize))
+        }
+        _                   => {
+          Argument::Address(Address::from_reg_idx((bytecode.low >> 8) as usize))
+        }
+
       };
     Instruction::Unary {
       opcode,
-      address
+      argument
     }
   }
 
@@ -109,38 +121,39 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
 pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
   match instruction{
 
-    Instruction::BinaryFunctor {opcode, address, functor} => {
+    Instruction::Binary {opcode, address, argument} => {
+      let high = match argument {
+        Argument::Address(address2) => address2.enc(),
+        Argument::Functor(functor)  => encode_functor(&functor),
+        Argument::Word(_)           => {
+          unreachable!("Error: `Argument::Word` cannot be an argument to `Instruction::Binary`.");
+        }
+      };
       Bytecode::DoubleWord(
         TwoWords {
-          low: (Into::<u8>::into(*opcode) as Word) + (address.enc() << 8),
-          high: encode_functor(&functor),
+          low: opcode.code() + (address.enc() << 8),
+          high,
         }
       )
     }
 
-    Instruction::Binary {opcode, address1, address2 } => {
-      let add1 = address1.enc();
-      let add2 = address2.enc();
-      // [OpCode:8][Address:24][Address:24][Reserved:8]
-      Bytecode::DoubleWord(
-        TwoWords {
-          low: (Into::<u8>::into(*opcode) as Word) + (add1 << 8),
-          high: add2,
-        }
-      )
-    },
-
-    Instruction::Unary {opcode, address} => {
-      let add = address.enc() as Word;
+    Instruction::Unary {opcode, argument} => {
       // [OpCode:8][Address:24]
-      Bytecode::Word(
-        (Into::<u8>::into(*opcode) as Word) + (add << 8 )
-      )
+      let parameter = match argument{
+        Argument::Address(address) => address.enc(),
+        Argument::Word(word)       => *word,
+        Argument::Functor(_)       => {
+          unreachable!(
+            "Error: `Argument::Functor` cannot be an argument to `Instruction::Unary`."
+          );
+        },
+      };
+      Bytecode::Word( opcode.code() + (parameter << 8) )
     },
 
-    Instruction::Nullary(opcode) => {
+    Instruction::Nullary(opcode)   => {
       // [OpCode:8]
-      Bytecode::Word(Into::<u8>::into(*opcode) as Word)
+      Bytecode::Word(opcode.code())
     },
   }
 }
@@ -149,7 +162,7 @@ pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
 /// Returns the size in WORDS of an instruction for the corresponding opcode.
 #[allow(dead_code)]
 pub fn instruction_size(opcode: &Operation) -> Word{
-  match Into::<u8>::into(*opcode) < MAX_DOUBLE_WORD_OPCODE {
+  match opcode.code() < MAX_DOUBLE_WORD_OPCODE {
     true  => 2, // Two words
     false => 1  // One Word
   }
@@ -162,7 +175,7 @@ pub fn instruction_size(opcode: &Operation) -> Word{
   Note that this function does not check if the input has a valid opcode.
 */
 pub fn is_double_word_instruction(word: &Word) -> bool{
-  (*word as u8) < MAX_DOUBLE_WORD_OPCODE
+  (*word & 0xFF) < MAX_DOUBLE_WORD_OPCODE
 }
 
 
@@ -173,15 +186,15 @@ fn decode_functor(word: &Word) -> Functor{
 
     Some(functor) => functor.clone(),
 
-    None => {
+    None          => {
       // ToDo: Make a more robust automatic naming scheme.
-      // ASCII 97 = 'a'.
       let new_name = DefaultAtom::from(
+        // ASCII 97 = 'a'.
         ((97u8 + functor_address.idx() as u8) as char).to_string()
       );
-      let functor = Functor {
-        name: new_name,
-        arity: (word >> 16) as ArityType
+      let functor  = Functor {
+        name  : new_name,
+        arity : (word >> 16) as ArityType
       };
       intern_functor(&functor);
       functor

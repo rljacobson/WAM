@@ -19,6 +19,7 @@ mod bytecode;
 mod compiler;
 
 use crate::wvm::WVM;
+use crate::compiler::Compilation;
 
 fn main() {
 
@@ -37,14 +38,16 @@ fn main() {
   \tp(f(X), h(Y, f(a)), Y)";
   println!("Input Expression: \n{}\n", text);
 
+  /*
   // High level WVM:
   let result = WVM::from_source(text);
   match result{
     Some(mut machine) => {
       machine.run();
     }
-    None => { /**/ }
+    None => { *//**//* }
   }
+  */
 
   // Parser:
   /*
@@ -66,18 +69,16 @@ fn main() {
   */
 
   // Compiler:
-  /*
-  match Compilation::compile(text, false) {
+  match Compilation::compile(text, true) {
     Some(mut compilation) => {
       let mut machine = WVM::from_compilation(&mut compilation);
       machine.run()
     },
     None => {
       // The errors should have already been printed.
-      // println!("Failed to compile.")
+      println!("Failed to compile, but no error message.")
     }
   };
-  */
 
   // Assembly:
   /*
