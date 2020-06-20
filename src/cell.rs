@@ -1,4 +1,17 @@
-//! Concrete in-memory representation of terms
+/*!
+
+  A `Cell` abstractly represents the data that may be stored at a single location in a memory
+  store. The `Cell` enum can produce a concrete representation of itself as a `Word`. A `Cell`
+  can also produce its tag value used in its binary representation to indicate its datatype.
+
+  The name `Cell` is a misnomer. Technically the word cell refers to a memory cell, a
+  single space at a specific location in memory into which data can be stored. We are
+  conflating the data with the storage space at which it lives. This is done out of
+  convenience. We use the word address when we want to refer to a location in memory
+  and word when we want to refer to the data. (Such use of both of these words are
+  again misnomers: an address is not a house, and an acre is not a plot of land.)
+
+*/
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
@@ -30,6 +43,8 @@ pub enum Cell {
   /// A cell containing nothing. Used when growing a memory store so it can be filled out of order.
   Empty
 }
+
+
 
 impl Display for Cell{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {

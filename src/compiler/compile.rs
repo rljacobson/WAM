@@ -414,7 +414,7 @@ impl Compilation {
       },
 
       Bytecode::DoubleWord(double_word) => {
-        let words: TwoWords;
+        let words: DoubleWord;
         unsafe {
           words = std::mem::transmute(double_word);
         }

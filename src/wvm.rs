@@ -21,14 +21,16 @@ use crate::compiler::Compilation;
 
 lazy_static! {
   /**
-    This symbol table keeps track of the names of functors that have been compiled to bytecode so
-    that the names can be reconstituted for the human reader. Otherwise, functors would have
+
+    This symbol table keeps track of the names of functors that have been compiled to bytecode
+    so that the names can be reconstituted for the human reader. Otherwise, functors would have
     auto-generated names. (An alternative design choice is to serialize the names to bytecode.)
 
     The symbol table associates to each unique functor a "virtual address," which is a
     stand-in for the functor's text name `f/n` in bytecode. This is distinct from the internal
-    representation of the interned string of the name, which is handled by `string_cache`. The
-    virtual address is embedded in bytecode instructions that take a functor as arguments.
+    representation of the interned string of the name, which is handled by `string_cache`.
+    The virtual address is embedded in bytecode instructions that take a functor as arguments.
+
   */
   pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
     Arc::new(Mutex::new(BiMap::new()));
@@ -654,7 +656,7 @@ impl WVM {
     // In M_1, query code always appears first, while everything else is fact code.
     self.query = true;
 
-    let mut words = TwoWords { low: 0, high: 0 };
+    let mut words = DoubleWord { low: 0, high: 0 };
     loop {
       if self.ip >= self.code.len() {
         // Either a `Halt` instruction was executed, or we ran out of bytecode to run.

@@ -8,7 +8,6 @@ use num_enum::{TryFromPrimitive, IntoPrimitive};
 use crate::address::Address;
 use crate::functor::Functor;
 use crate::bytecode::Word;
-// pub use assembly::parse_assembly;
 
 /**
   Opcodes of the virtual machine.

@@ -7,14 +7,14 @@ Terms have the following recursively defined lexical structure:
   * Variables: A single uppercase letter other than `X`
   * Registers: An `X` followed by an integer
   * Constants: A single lowercase letter
-  * Functors: A single lowercase letter followed by a comma-delineated list of terms enclosed in
-              parentheses
+  * Functors: A single lowercase letter followed by a comma-delineated list of terms
+              enclosed in parentheses
   * A Program: The top-most (outer-most) term with no prefix (cp. Query).
   * A Query: The literal `?-` followed by a top-most (outer-most) term
 
-Whitespace is ignored. It is an error to have two terms adjacent except if separated by a comma
-as part of a functor. We allow `X` as a variable name but emit a warning. We allow
-comma-delineated lists to have a trailing comma without warning.
+Whitespace is ignored. It is an error to have two terms adjacent except if separated
+by a comma as part of a functor. We allow `X` as a variable name but emit a
+warning. We allow comma-delineated lists to have a trailing comma without warning.
 
 The internal representation of a functor is a (functor) structure, which has a name and
 a list of arguments, themselves `Terms`. This is the only tree-like (recursive) `Term`

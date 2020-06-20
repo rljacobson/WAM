@@ -28,7 +28,7 @@
 
 pub use assembly::{parse_assembly, AssemblySyntax};
 pub use binary::{encode_instruction, Bytecode, is_double_word_instruction,
-                 try_decode_instruction, TwoWords, Word};
+                 try_decode_instruction, DoubleWord, Word};
 pub use instruction::{Instruction, Argument, Operation};
 
 mod binary;

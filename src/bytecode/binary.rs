@@ -20,12 +20,12 @@ use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_UNARY_OPCODE, MAX_FUNCTOR_O
 pub type Word = u32;
 
 /*
-  Convenience for decomposing a DoubleWord into a high word and a low word. In fact, the
-  bytecode is designed so that no bit operations have to span a word boundary, so this is more
-  convenient that `DoubleWord` in general.
+  Convenience for decomposing a u64 into a high word and a low word. In
+  fact, the bytecode is designed so that no bit operations have to span
+  a 32-bit word boundary, so this is more convenient than a u64 in general.
 */
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
-pub struct TwoWords {
+pub struct DoubleWord {
   pub low  : Word,
   pub high : Word
 }
@@ -35,7 +35,7 @@ pub struct TwoWords {
 #[derive(Copy, Clone, Eq, PartialEq, Debug)]
 pub enum Bytecode {
   Word(Word),
-  DoubleWord(TwoWords)
+  DoubleWord(DoubleWord)
 }
 
 impl Display for Bytecode{
@@ -49,7 +49,7 @@ impl Display for Bytecode{
 }
 
 pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
-  let mut bytecode = TwoWords{ low: 0, high: 0 };
+  let mut bytecode = DoubleWord { low: 0, high: 0 };
   match &encoded {
     Bytecode::Word(w)        => { bytecode.low = *w; }
     Bytecode::DoubleWord(tw) => { bytecode = *tw; }
@@ -130,7 +130,7 @@ pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
         }
       };
       Bytecode::DoubleWord(
-        TwoWords {
+        DoubleWord {
           low: opcode.code() + (address.enc() << 8),
           high,
         }
