@@ -1,5 +1,7 @@
-#![feature(type_ascription, pattern)]
-// nom's type inference requirements
+#![feature(type_ascription, pattern)] // For self-documenting code.
+#![feature(core_intrinsics)]          // For `discriminent_value()`
+
+// nom's type inference requirements.
 // See https://github.com/rust-lang/rust/issues/54540
 #![type_length_limit="4180863"]
 #![allow(dead_code)]
@@ -20,8 +22,12 @@ mod compiler;
 
 use crate::wvm::WVM;
 use crate::compiler::Compilation;
+use crate::cell::Cell;
+use std::mem::{size_of, align_of};
 
 fn main() {
+
+  println!("Size of Cell: {}", align_of::<u16>());
 
   #[cfg(feature = "trace_computation")]
   println!("Computation Tracing ENABLED");

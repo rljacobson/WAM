@@ -1,5 +1,13 @@
-//! An `Either` type that holds the address of either a register or memory, with some convenience
-//! functions.
+/*!
+
+  A pointer type that knows which among the heap, code, registers, and stack that it points to. The
+  `Functor::require_*` methods are intended for debug-mode to catch logic errors resulting in an
+  address to memory store A being used in a context meant only for an address to memory store B.
+
+  If the address type will ever be refactored in the future to be a simple pointer (`*Word`),
+  the API shouldn't have to change, just the implementation details in this file alone.
+
+*/
 
 use std::ops::Add;
 use std::fmt::{Display, Formatter};

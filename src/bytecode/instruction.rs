@@ -136,9 +136,11 @@ impl Display for Instruction {
 }
 
 impl Operation{
+
+  /// Gives the 8-bit numeric value that represents the operation. An operation's code is
+  /// sometimes called a tag.
   pub fn code(&self) -> Word {
     Into::<u8>::into(*self) as Word
-    // Into::<u8>::into(*self)
   }
 
   pub fn is_functor(&self) -> bool {

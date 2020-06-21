@@ -2,13 +2,9 @@
 //! implementation of Warren's Abstract Machine.
 #![allow(unused_parens)]
 
-use std::{
-  sync::{Arc, Mutex},
-  fmt::{Display, Formatter},
-};
+use std::fmt::{Display, Formatter};
 
 use prettytable::{format as TableFormat, Table};
-use bimap::BiMap;
 use string_cache::DefaultAtom;
 
 use crate::address::*;
@@ -18,23 +14,6 @@ use crate::bytecode::*;
 use crate::compiler::term::*;
 use crate::compiler::Compilation;
 
-
-lazy_static! {
-  /**
-
-    This symbol table keeps track of the names of functors that have been compiled to bytecode
-    so that the names can be reconstituted for the human reader. Otherwise, functors would have
-    auto-generated names. (An alternative design choice is to serialize the names to bytecode.)
-
-    The symbol table associates to each unique functor a "virtual address," which is a
-    stand-in for the functor's text name `f/n` in bytecode. This is distinct from the internal
-    representation of the interned string of the name, which is handled by `string_cache`.
-    The virtual address is embedded in bytecode instructions that take a functor as arguments.
-
-  */
-  pub static ref SYMBOLS: Arc<Mutex<BiMap<Functor, Address>>> =
-    Arc::new(Mutex::new(BiMap::new()));
-}
 
 #[allow(non_snake_case)]
 pub struct WVM {
@@ -867,33 +846,5 @@ impl Display for Mode{
         write!(f, "Write")
       }
     }
-  }
-}
-
-pub fn try_get_interned_functor(address: &Address) -> Option<Functor>{
-  let symbols       = SYMBOLS.lock().unwrap();
-  let maybe_functor = symbols.get_by_right(address);
-
-  match maybe_functor {
-    Some(functor) => Some(functor.clone()),
-    None          => None
-  }
-}
-
-/// Gives the virtual address of a `Functor`, creating a new entry in the symbol table if
-/// necessary. The virtual address is a stand-in for the functor's text name in compiled code.
-pub fn intern_functor(functor: &Functor) -> Address{
-  let mut symbols = SYMBOLS.lock().unwrap();
-
-  match symbols.get_by_left(functor) {
-
-    Some(address) => *address,
-
-    None          => {
-      let address = Address::Functor(symbols.len());
-      symbols.insert(functor.clone(), address);
-      address
-    }
-
   }
 }

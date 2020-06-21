@@ -27,7 +27,7 @@ use crate::functor::*;
 use crate::bytecode::*;
 use super::term::*;
 use crate::compiler::parser::parse as parse_source_code;
-use crate::wvm::intern_functor;
+use crate::functor::intern_functor;
 
 /// A `Compilation` is the result of executing `Compilation::compile(source)` and may contain
 /// binary bytecode, assembly code, and/or line labels.

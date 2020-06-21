@@ -6,13 +6,9 @@
 use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 
-use string_cache::DefaultAtom;
-
 use crate::address::Address;
-use crate::functor::{Functor, ArityType};
+use crate::functor::Functor;
 use super::{Operation, Instruction, Argument};
-// ToDo: This dependency is frustrating. Can it be removed?
-use crate::wvm::{intern_functor, try_get_interned_functor};
 use super::instruction::{MAX_DOUBLE_WORD_OPCODE, MAX_UNARY_OPCODE, MAX_FUNCTOR_OPCODE};
 
 
@@ -70,7 +66,7 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
     Instruction::Binary {
       opcode,
       address : Address::from_reg_idx( (bytecode.low >> 8) as usize),
-      argument: Argument::Functor(decode_functor(&bytecode.high)),
+      argument: Argument::Functor(Functor::dec(&bytecode.high)),
     }
   }
 
@@ -124,7 +120,7 @@ pub fn encode_instruction(instruction: &Instruction) -> Bytecode {
     Instruction::Binary {opcode, address, argument} => {
       let high = match argument {
         Argument::Address(address2) => address2.enc(),
-        Argument::Functor(functor)  => encode_functor(&functor),
+        Argument::Functor(functor)  => functor.enc(),
         Argument::Word(_)           => {
           unreachable!("Error: `Argument::Word` cannot be an argument to `Instruction::Binary`.");
         }
@@ -179,32 +175,3 @@ pub fn is_double_word_instruction(word: &Word) -> bool{
 }
 
 
-fn decode_functor(word: &Word) -> Functor{
-  let functor_address = Address::from_funct_idx((word & 0xFFFF) as usize);
-
-  match try_get_interned_functor(&functor_address) {
-
-    Some(functor) => functor.clone(),
-
-    None          => {
-      // ToDo: Make a more robust automatic naming scheme.
-      let new_name = DefaultAtom::from(
-        // ASCII 97 = 'a'.
-        ((97u8 + functor_address.idx() as u8) as char).to_string()
-      );
-      let functor  = Functor {
-        name  : new_name,
-        arity : (word >> 16) as ArityType
-      };
-      intern_functor(&functor);
-      functor
-    }
-
-  }
-}
-
-fn encode_functor(functor: &Functor) -> Word{
-  let functor_address = intern_functor(functor);
-
-  ((functor.arity as Word) << 16) + (functor_address.idx() as Word)
-}
