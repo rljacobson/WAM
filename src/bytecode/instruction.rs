@@ -2,7 +2,7 @@
 // use std::convert::TryFrom;
 use std::fmt::{Display, Formatter};
 
-use strum_macros::{Display as StrumDisplay, IntoStaticStr};
+use strum_macros::{Display as StrumDisplay, IntoStaticStr, EnumString};
 use num_enum::{TryFromPrimitive, IntoPrimitive};
 
 use crate::address::Address;
@@ -25,8 +25,8 @@ use crate::bytecode::Word;
       ```
 */
 #[derive(
-StrumDisplay, IntoStaticStr, EnumString, TryFromPrimitive, IntoPrimitive,
-Clone,        Copy,          Eq, PartialEq,  Debug,            Hash
+  StrumDisplay, IntoStaticStr, EnumString, TryFromPrimitive, IntoPrimitive,
+  Clone,        Copy,          Eq,         PartialEq,        Debug, Hash
 )]
 #[repr(u8)]
 pub enum Operation {
@@ -69,6 +69,29 @@ pub enum Operation {
 pub const MAX_UNARY_OPCODE       :  Word  = 12;
 pub const MAX_DOUBLE_WORD_OPCODE :  Word  = 6;
 pub const MAX_FUNCTOR_OPCODE     :  Word  = 2;
+
+impl Operation{
+
+  /// Gives the 8-bit numeric value that represents the operation. An operation's code is
+  /// sometimes called a tag. The tag is padded with zeros to make a `Word`.
+  pub fn code(&self) -> Word {
+    // Into::<u8>::into(*self) as Word
+    let val: u8 = (*self).into();
+    val as Word
+  }
+
+  pub fn is_functor(&self) -> bool {
+    self.code() < MAX_FUNCTOR_OPCODE
+  }
+
+  pub fn arity(&self) -> Word {
+    match self.code() {
+      value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
+      value if value < MAX_UNARY_OPCODE        => 1,
+      _value                                   => 0
+    }
+  }
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Hash)]
 pub enum Argument{
@@ -131,27 +154,6 @@ impl Display for Instruction {
       }
 
       _ => { unreachable!() }
-    }
-  }
-}
-
-impl Operation{
-
-  /// Gives the 8-bit numeric value that represents the operation. An operation's code is
-  /// sometimes called a tag.
-  pub fn code(&self) -> Word {
-    Into::<u8>::into(*self) as Word
-  }
-
-  pub fn is_functor(&self) -> bool {
-    self.code() < MAX_FUNCTOR_OPCODE
-  }
-
-  pub fn arity(&self) -> Word {
-    match self.code() {
-      value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
-      value if value < MAX_UNARY_OPCODE        => 1,
-      _value                                   => 0
     }
   }
 }

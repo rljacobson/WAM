@@ -7,7 +7,7 @@ edition = "2018"
 
 [features]
 #  Enabling `trace_computation` will print the VM state at every instruction.
-#default = ["trace_computation"]
+default = ["trace_computation"]
 trace_computation = []
 
 [dependencies]

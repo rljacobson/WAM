@@ -53,29 +53,38 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
 
   let opcode: Operation =
     match Operation::try_from((bytecode.low & 0xFF) as u8) {
-
       Ok(oc)  => oc,
-
       Err(_e) => { return None; }
-
     };
 
   let instruction = // = the value of the following giant if statement:
   if opcode.code() < MAX_FUNCTOR_OPCODE {
     // [OpCode:8][Address:24][Name:16][Arity:16]
+    let address = match Address::try_decode(bytecode.low >> 8){
+      Some(a) => a,
+      None    => { return None; }
+    };
     Instruction::Binary {
       opcode,
-      address : Address::from_reg_idx( (bytecode.low >> 8) as usize),
-      argument: Argument::Functor(Functor::dec(&bytecode.high)),
+      address,
+      argument: Argument::Functor(Functor::dec(bytecode.high)),
     }
   }
 
   else if opcode.code() < MAX_DOUBLE_WORD_OPCODE {
     // [OpCode:8][Address:24][Address:24][Reserved:8]
+    let address = match Address::try_decode(bytecode.low >> 8){
+      Some(a) => a,
+      None    => { return None; }
+    };
+    let address2 = match Address::try_decode(bytecode.high){
+      Some(a) => a,
+      None    => { return None; }
+    };
     Instruction::Binary {
       opcode,
-      address : Address::from_heap_idx((bytecode.low >> 8) as usize),
-      argument: Argument::Address(Address::from_reg_idx(bytecode.high as usize))
+      address,
+      argument: Argument::Address(address2)
     }
   }
 
@@ -86,11 +95,12 @@ pub fn try_decode_instruction(encoded: &Bytecode) -> Option<Instruction> {
 
         Operation::Allocate => Argument::Word(bytecode.low >> 8),
 
-        Operation::Call     => {
-          Argument::Address(Address::from_code_idx((bytecode.low >> 8) as usize))
-        }
         _                   => {
-          Argument::Address(Address::from_reg_idx((bytecode.low >> 8) as usize))
+          let address = match Address::try_decode(bytecode.low >> 8) {
+            Some(a) => a,
+            None    => { return None; }
+          };
+          Argument::Address(address)
         }
 
       };

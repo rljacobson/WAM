@@ -15,7 +15,11 @@
 
 use std::collections::HashSet;
 use std::fmt::{Display, Formatter};
+use std::convert::TryFrom;
 use std::rc::Rc;
+
+use strum_macros::{EnumDiscriminants, Display as StrumDisplay};
+use num_enum::{TryFromPrimitive, IntoPrimitive};
 
 use crate::functor::Functor;
 use crate::address::Address;
@@ -29,7 +33,11 @@ pub type CellVec = Vec<Cell>;
 
   The `Cell::Structure` variant is only stored in registers as an intermediate representation.
 */
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(EnumDiscriminants, Clone, Eq, PartialEq, Debug, Hash,)]
+#[strum_discriminants(derive(IntoStaticStr, StrumDisplay, IntoPrimitive, TryFromPrimitive))]
+#[strum_discriminants(name(CellType))]
+#[strum_discriminants(repr(u8))]
+#[repr(u8)]
 pub enum Cell {
   /// A cell containing nothing. Used when growing a memory store so it can be filled out of order.
   Empty,
@@ -110,8 +118,42 @@ impl Cell {
     }
   }
 
-  pub fn try_decode(encoded: Word){
+  pub fn try_decode(word: Word) -> Option<Cell>{
+    let tag = word & 0xFF;
+    match CellType::try_from(tag as u8) {
 
+      Ok(CellType::Empty)   => Some(Cell::Empty),
+
+      Ok(CellType::STR)     => {
+        let address = match Address::try_decode(tag >> 8) {
+          Some(a) => a,
+          None => {
+            return None;
+          }
+        };
+        Some(Cell::STR(address))
+      },
+
+      Ok(CellType::REF)     => {
+        let address = match Address::try_decode(tag >> 8) {
+          Some(a) => a,
+          None => {
+            return None;
+          }
+        };
+        Some(Cell::REF(address))
+      },
+
+      Ok(CellType::Functor) => {
+        Some(Cell::Functor(Functor::dec(tag >> 8)))
+      },
+
+      _                => {
+        eprintln!("Error: Could not decode the word as a cell value: {:X}", word);
+        None
+      }
+
+    }
   }
 
   /// Gives the 8-bit numeric value that represents the cell variant. To encode both the variant

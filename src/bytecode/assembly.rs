@@ -178,7 +178,7 @@ pub fn parse_assembly(text: &str) -> Result<Vec<Syntax>, nom::Err<(&str, nom::er
           alt((
             map(preceded(space0, binary_inst_p),
               | out: (&str, _) | {
-                let opcode_result = Operation::from_str(out.0);
+                let opcode_result = Operation::from_str(out.0); // Strum magic
                 match opcode_result {
                   Ok(operation) if operation.is_functor() =>
                     Syntax::Instruction(Instruction::Binary {

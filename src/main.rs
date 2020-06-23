@@ -22,12 +22,8 @@ mod compiler;
 
 use crate::wvm::WVM;
 use crate::compiler::Compilation;
-use crate::cell::Cell;
-use std::mem::{size_of, align_of};
 
 fn main() {
-
-  println!("Size of Cell: {}", align_of::<u16>());
 
   #[cfg(feature = "trace_computation")]
   println!("Computation Tracing ENABLED");
@@ -78,11 +74,12 @@ fn main() {
   match Compilation::compile(text, true) {
     Some(mut compilation) => {
       let mut machine = WVM::from_compilation(&mut compilation);
-      machine.run()
+      println!("{}", machine.dump_assembly());
+      machine.run();
     },
     None => {
       // The errors should have already been printed.
-      println!("Failed to compile, but no error message.")
+      println!("Failed to compile, but no error message.");
     }
   };
 

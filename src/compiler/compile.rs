@@ -396,11 +396,15 @@ impl Compilation {
 
   fn emit_assembly(&mut self, instruction: &Instruction, _cell: &Cell,
                    encoded_instruction: &Bytecode){
+    let decoded = match try_decode_instruction(encoded_instruction){
+      Some(i) => format!("{}", i),
+      None => "Could not decode.".to_string()
+    };
     self.assembly_buffer.push_str(
-      format!("{:30}% {:>11}\n",
+      format!("{:30}% {:>11} {}\n",
               format!("{}", instruction),
               format!("{}", encoded_instruction),
-              // cell,
+              decoded
       ).as_str()
     );
   }

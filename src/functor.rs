@@ -62,8 +62,12 @@ impl Functor{
     functor. However, a random `Word` is likely to decode to a functor
     with an unusually large arity and an unknown (to the interner) name.
   */
-  pub fn dec(word: &Word) -> Functor{
-    let functor_address = Address::from_funct_idx((word & 0xFFFF) as usize);
+  pub fn dec(word: Word) -> Functor{
+    let functor_address = match Address::try_decode(word & 0xFFFF){
+      Some(a) => a,
+      // ToDo: What should happen in this arm?
+      None => Address::from_funct_idx((word & 0xFFFF) as usize)
+    };
 
     match try_get_interned_functor(&functor_address) {
 
