@@ -27,9 +27,8 @@
 */
 
 pub use assembly::{parse_assembly, AssemblySyntax};
-pub use instruction::{Instruction, Argument, Operation, encode_instruction,
-                      Bytecode, is_double_word_instruction, try_decode_instruction,
-                      DoubleWord, Word};
+pub use instruction::{Instruction, Argument, Operation,
+                      Bytecode, DoubleWord, Word};
 
 mod instruction;
 mod assembly;

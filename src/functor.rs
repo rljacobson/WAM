@@ -48,11 +48,14 @@ impl Functor{
     Returns a binary encoding of the functor as a `Word`.
   */
   pub fn enc(&self) -> Word{
-    // ToDo: The name is not encoded correctly, because the same name
-    //       does not encode the same if the arity of the functors differ.
+    // ToDo: There should be an encoding that sores the functor name and arity rather than the
+    //       functor's address in the symbol table. This is easy to do if we give up one of:
+    //          1. a byte from the arity, which isn't unreasonable;
+    //          2. the idea of every cell value having a tag.
+    //       Tagged cell values are necessary for displaying the decoded contents of cells.
     let functor_address = intern_functor(self);
 
-    ((self.arity as Word) << 16) + (functor_address.enc())
+    functor_address.enc()
   }
 
   /**
@@ -63,18 +66,21 @@ impl Functor{
     with an unusually large arity and an unknown (to the interner) name.
   */
   pub fn dec(word: Word) -> Functor{
-    let functor_address = match Address::try_decode(word & 0xFFFF){
-      Some(a) => a,
-      // ToDo: What should happen in this arm?
-      None => Address::from_funct_idx((word & 0xFFFF) as usize)
-    };
+    // let functor_address = Address::Functor(word as AddressNumberType);
+    let functor_address =
+      match Address::try_decode(word & 0xFFFF){
+        Some(a) => a,
+        // ToDo: What should happen in this arm?
+        None => Address::from_funct_idx((word & 0xFFFF) as usize),
+      };
 
     match try_get_interned_functor(&functor_address) {
 
       Some(functor) => functor.clone(),
 
       None          => {
-        // ToDo: Make a more robust automatic naming scheme.
+        // ToDo: Make a more robust automatic naming scheme. This should only be necessary if the
+        //       code/data is read from a binary file rather than being produced from source code.
         let new_name = DefaultAtom::from(
           // ASCII 97 = 'a'.
           ((97u8 + functor_address.idx() as u8) as char).to_string()

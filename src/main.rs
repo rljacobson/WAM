@@ -74,7 +74,6 @@ fn main() {
   match Compilation::compile(text, true) {
     Some(mut compilation) => {
       let mut machine = WVM::from_compilation(&mut compilation);
-      println!("{}", machine.dump_assembly());
       machine.run();
     },
     None => {

@@ -147,12 +147,12 @@ impl Compilation {
               format!("{:30}%   {}\n", format!("{}", instruction), f).as_str()
             );
           }
-          encode_instruction(&instruction)
+          instruction.encode_instruction()
         })
     );
     // Finally, a `Halt`
     let halt = Instruction::Nullary(Operation::Halt);
-    new_encoded.push(encode_instruction(&halt));
+    new_encoded.push(halt.encode_instruction());
     if to_assembly {
       new_assembly.push_str(
         format!("{:30}%   {}\n", format!("{}", halt), "End Program").as_str()
@@ -276,7 +276,7 @@ impl Compilation {
                 argument: Argument::Functor(functor)
               }
             }; // end match is_program
-          let encoded_instruction = encode_instruction(&instruction);
+          let encoded_instruction = instruction.encode_instruction();
           self.emit_bytecode(encoded_instruction);
           if to_assembly {
             self.emit_assembly(&instruction, &term, &encoded_instruction);
@@ -286,7 +286,7 @@ impl Compilation {
           for arg in args[1..].iter(){
             let address = arg.extract_address().unwrap();
             instruction = match_address_to_instruction(&address);
-            let encoded_instruction = encode_instruction(&instruction);
+            let encoded_instruction = instruction.encode_instruction();
             self.emit_bytecode(encoded_instruction);
             if to_assembly {
               self.emit_assembly(&instruction, &term, &encoded_instruction);
@@ -297,7 +297,7 @@ impl Compilation {
 
         Cell::REF(address) => {
           let instruction = match_address_to_instruction(&address);
-          let encoded_instruction = encode_instruction(&instruction);
+          let encoded_instruction = instruction.encode_instruction();
           self.emit_bytecode(encoded_instruction);
           if to_assembly {
             self.emit_assembly(&instruction, &term, &encoded_instruction);
@@ -313,7 +313,7 @@ impl Compilation {
 
     // For now, we end query construction with a `Proceed` as well.
     let instruction = Instruction::Nullary(Operation::Proceed);
-    let encoded_instruction = encode_instruction(&instruction);
+    let encoded_instruction = instruction.encode_instruction();
     self.emit_bytecode(encoded_instruction);
     if to_assembly {
       self.assembly_buffer.push_str(
@@ -382,7 +382,7 @@ impl Compilation {
 
       true => {
         for instruction in instructions {
-          self.emit_bytecode(encode_instruction(&instruction));
+          self.emit_bytecode(instruction.encode_instruction());
         }
         println!("Compiled to {} bytes of bytecode in {:?}.",
                  self.code.len() * 4, compilation_time.elapsed());
@@ -396,7 +396,7 @@ impl Compilation {
 
   fn emit_assembly(&mut self, instruction: &Instruction, _cell: &Cell,
                    encoded_instruction: &Bytecode){
-    let decoded = match try_decode_instruction(encoded_instruction){
+    let decoded = match encoded_instruction.try_decode(){
       Some(i) => format!("{}", i),
       None => "Could not decode.".to_string()
     };

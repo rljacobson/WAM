@@ -50,7 +50,7 @@ impl Address {
       | Address::Functor(i)
       | Address::Code(i) => *i as AddressNumberType,
       // Registers count from 1, so subtract 1 to convert to index.
-      Address::Register(i ) => (i-1) as AddressNumberType,
+      Address::Register(i) => (i-1) as AddressNumberType,
     }
   }
 
@@ -61,13 +61,12 @@ impl Address {
   /// Encodes the address into the bits as they appear in bytecode.
   pub fn enc(&self) -> Word {
     let index = self.idx() as Word;
-
     (index << 2) | self.tag()
   }
 
   pub fn try_decode(word: Word) -> Option<Address>{
-    let tag     = word & 3;  // First two bits are the tag.
-    let index = word >> 2;
+    let tag     = word & 0b11;  // First two bits are the tag.
+    let index   = word >> 2;
 
     match Segment::try_from(tag as u8) {
       Ok(Segment::Heap)     => Some(Address::from_heap_idx( index as usize )),

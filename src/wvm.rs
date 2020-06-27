@@ -24,16 +24,16 @@ pub struct WVM {
   mode  : Mode, // In Write mode, new elements are built on the heap.
 
   // Memory Stores
-  heap  : Vec<Cell>, // Data memory store ("global stack" in [Warren])
+  heap  : Vec<Word>, // Data memory store ("global stack" in [Warren])
   code  : Vec<Word>, // Code memory, a binary memory store
-  stack : Vec<Cell>, // Environment stack.
+  stack : Vec<Word>, // Environment stack.
 
   // Registers //
   hp        : usize,     // Heap Pointer, a cursor for unification (S in [Aït-Kaci])
   rp        : usize,     // Register Pointer, a cursor for display
   ip        : usize,     // Instruction Pointer (P in [Aït-Kaci])
   cp        : usize,     // Continuation Pointer, the jump target for `Proceed`
-  registers : Vec<Cell>, // Term registers, a memory store (X[i] in [Aït-Kaci])
+  registers : Vec<Word>, // Term registers, a memory store (X[i] in [Aït-Kaci])
 
   // Symbol table mapping line labels to their address in code memory.
   labels          : Vec<(Functor, Address)>,
@@ -87,13 +87,12 @@ impl WVM {
     }
   }
 
-  fn make_register_table<T> (
+  fn make_memory_table(
       name      : &str,
-      registers : &[T],
+      registers : &[Word],
       highlight : usize,
       start     : usize
     ) -> Table
-    where T: Display
   {
 
     let mut table = Table::new();
@@ -101,7 +100,8 @@ impl WVM {
     table.set_format(*TABLE_DISPLAY_FORMAT);
     table.set_titles(row![ubr->"Address", ubl->"Contents"]);
 
-    for (i, cell) in registers.iter().enumerate() {
+    for (i, encoded_cell) in registers.iter().enumerate() {
+      let cell = Cell::try_decode(*encoded_cell).unwrap();
       match i == highlight{
 
         true  => {
@@ -184,11 +184,16 @@ impl WVM {
 
   /// Performs one step of `dereference`, what C programmers think of as dereferencing.
   fn value_at(&self, ptr: &Address) -> Cell{
+    Cell::try_decode(self.word_at(ptr)).unwrap()
+  }
+
+  /// Same as `value_at()`, but does not decode data into `Cell`.
+  fn word_at(&self, ptr: &Address) -> Word{
     match ptr {
 
-      Address::Heap(_)      => self.heap[ptr.idx()].clone(),
+      Address::Heap(_)      => self.heap[ptr.idx()],
 
-      Address::Register(_)  => self.registers[ptr.idx()].clone(),
+      Address::Register(_)  => self.registers[ptr.idx()],
 
       | Address::Functor(_)
       | Address::Code(_)    => {
@@ -199,6 +204,7 @@ impl WVM {
     }
   }
 
+
   /**
     Sets the value at the given address, dynamically growing the relevant vector if the address
     is larger than the max index of the vector.
@@ -206,20 +212,24 @@ impl WVM {
     See `set_value` for differences between the two functions.
   */
   fn set_value_at(&mut self, address: &Address, cell: &Cell){
+    self.set_word_at(address, &cell.enc());
+  }
+
+  fn set_word_at(&mut self, address: &Address, word: &Word){
     match address {
 
       Address::Register(_)  => {
         if address.idx() >= self.registers.len() {
-          self.registers.resize(address.idx() + 1, Cell::Empty);
+          self.registers.resize(address.idx() + 1, 0);
         }
-        self.registers[address.idx()] = cell.clone();
+        self.registers[address.idx()] = *word;
       },
 
       Address::Heap(_)      => {
         if address.idx() >= self.heap.len() {
-          self.heap.resize(address.idx() + 1, Cell::Empty);
+          self.heap.resize(address.idx() + 1, 0);
         }
-        self.heap[address.idx()] = cell.clone();
+        self.heap[address.idx()] = *word;
       },
 
       | Address::Functor(_)
@@ -229,6 +239,7 @@ impl WVM {
 
     }
   }
+
 
   #[allow(dead_code)]
   pub fn dump_assembly(&self) -> &str {
@@ -259,8 +270,9 @@ impl WVM {
   }
 
   /**
-    Binds an unbound variable at one address to the other address. If both are unbound, the first
-     is bound to the second (arbitrarily).
+    Binds an unbound variable at one address to the other address. If both are unbound, registers
+    are preferentially bound to heap values; otherwise the first is bound to the second
+    (arbitrarily).
 
      address1: heap address
      address2: register address
@@ -319,8 +331,8 @@ impl WVM {
     #[cfg(feature = "trace_computation")] println!("PutStructure({}, {})", functor, address);
 
     let cell = Cell::STR(Address::from_heap_idx(self.heap.len() + 1));
-    self.heap.push(cell.clone());
-    self.heap.push(Cell::Functor(functor.clone()));
+    self.heap.push(cell.enc());
+    self.heap.push(Cell::Functor(functor.clone()).enc());
     self.set_value_at(address, &cell);
   }
 
@@ -335,7 +347,7 @@ impl WVM {
     #[cfg(feature = "trace_computation")] println!("SetVariable({})", reg_ptr);
 
     let cell = Cell::REF( Address::from_heap_idx( self.heap.len()) );
-    self.heap.push(cell.clone());
+    self.heap.push(cell.enc());
     self.set_value_at(reg_ptr, &cell);
   }
 
@@ -348,11 +360,11 @@ impl WVM {
           3. The data is always written to the cell at the top of the `HEAP`.
           4. The pointer type is guarded.
   */
-  fn set_value(&mut self, reg_ptr: &Address) {
-    reg_ptr.require_register();
-    #[cfg(feature = "trace_computation")] println!("SetValue({})", reg_ptr);
+  fn set_value(&mut self, register: &Address) {
+    register.require_register();
+    #[cfg(feature = "trace_computation")] println!("SetValue({})", register);
 
-    self.heap.push(self.value_at(reg_ptr));
+    self.heap.push(self.word_at(register));
   }
 
   /**
@@ -376,20 +388,20 @@ impl WVM {
         #[cfg(feature = "trace_computation")]
           println!("GetStructure({}, {}): creating struct", functor, address);
 
-        let functor_idx = self.heap.len() + 1;
-        let functor_address = Address::from_heap_idx(functor_idx);
-        let cell            = Cell::STR(functor_address);
-        self.mode           = Mode::Write;
+        let structure_idx     = self.heap.len();
+        let structure_address = Address::from_heap_idx(structure_idx);
+        let cell              = Cell::STR(structure_address + 1);
+        let new_functor       = Cell::Functor(functor.clone());
+        self.mode             = Mode::Write;
 
-        self.heap.push(cell);
-        self.heap.push(Cell::Functor(functor.clone()));
-        // Remember that we want to bind to the `STR`, not the `f/n`, so subtract 1..
-        self.bind(&target_address, &Address::from_heap_idx(functor_idx - 1));
+        self.set_value_at(&structure_address, &cell);
+        self.set_value_at(&(structure_address + 1), &new_functor);
+        self.bind(&target_address, &structure_address);
       },
 
       Cell::STR(heap_address @ Address::Heap(_)) => {
         // A pointer to a functor.
-        if self.heap[heap_address.idx()] == Cell::Functor(functor.clone()) {
+        if self.value_at(&heap_address) == Cell::Functor(functor.clone()) {
           #[cfg(feature = "trace_computation")]
             println!("GetStructure({}, {}): functor already on stack", functor, address);
 
@@ -427,9 +439,8 @@ impl WVM {
       Mode::Read  => {
         #[cfg(feature = "trace_computation")]
           println!("UnifyVariable({}):  {} <- H[S={}]", address, address, self.hp);
-
-        let value = self.heap[self.hp].clone();
-        self.set_value_at(address, &value);
+        let word = self.heap[self.hp];
+        self.set_word_at(address, &word);
       }
 
       Mode::Write => {
@@ -528,9 +539,9 @@ impl WVM {
     address2.require_register();
     #[cfg(feature = "trace_computation")] println!("PutVariable({}, {})", address1, address2);
 
-    let cell = Cell::REF(Address::Heap(self.heap.len()));
-    self.set_value_at(address1, &cell);
-    self.set_value_at(address2, &cell);
+    let cell = Cell::REF(Address::Heap(self.heap.len())).enc();
+    self.set_word_at(address1, &cell);
+    self.set_word_at(address2, &cell);
     self.heap.push(cell);
   }
 
@@ -544,13 +555,13 @@ impl WVM {
     address2.require_register();
     #[cfg(feature = "trace_computation")] println!("GetVariable({}, {})", address1, address2);
 
-    self.set_value_at(address1, &self.value_at(address2));
+    self.set_word_at(address1, &self.word_at(address2));
   }
 
   /**
     put_value Xn Ai
 
-    "A later occurrence copies its value into argument register Ai."
+    "[C]opies Xn's value into argument register Ai."
   */
   fn put_value(&mut self, address1: &Address, address2: &Address){
     address1.require_register();
@@ -588,8 +599,25 @@ impl WVM {
 
   /// Marks the end of a procedure and jumps to the address stored in `self.cp`.
   fn proceed(&mut self){
+    // End of procedure
     #[cfg(feature = "trace_computation")] println!("Proceed");
+
+    // M_2 only finds at most one success, as there is at most one fact for a given head.
+    if !self.fail && self.query == false {
+
+      #[cfg(not(feature = "trace_computation"))]
+      {
+        let term = self.memory_to_term(&Address::Register(1));
+        println!("{}\n", term.as_expression_string());
+      }
+
+      println!("TRUE");
+      return;
+    }
+    self.fail = false;
+    self.query = false;
     self.ip = self.cp;
+
   }
 
   /// Halts execution of the virtual machine by setting `self.ip` to the end of the code region.
@@ -601,6 +629,46 @@ impl WVM {
   // endregion
 
   // region VM control methods
+
+  /// Fetch the next instruction pointed at by `self.ip` and increment `self.ip` accordingly.
+  fn fetch_instruction(&mut self) -> Instruction {
+    let mut words = DoubleWord { low: 0, high: 0 };
+
+      words.low = self.code[self.ip];
+
+      let encoded = match Operation::is_double_word(&words.low) {
+
+        true if self.ip + 1 < self.code.len() => {
+          words.high = self.code[self.ip + 1];
+          Bytecode::DoubleWord(words)
+        }
+
+        true => {
+          // Needs another word, but there are no more.
+          panic!("Error: Unexpectedly ran out of bytecode.")
+        }
+
+        false => {
+          Bytecode::Word(words.low)
+        }
+
+      };
+
+      match encoded.try_decode() {
+
+        Some(i @ Instruction::Nullary(Operation::Proceed)) => {
+
+          i
+        },
+
+        Some(i) => i,
+
+        None => {
+          eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
+          panic!();
+        }
+      }
+  }
 
   /**
     Begin execution of the bytecode starting at code address 0. The instruction pointer
@@ -621,80 +689,23 @@ impl WVM {
     as possible. But we don't care about speed. In fact, it's already really fast.
   */
   pub fn run(&mut self){
-
-    #[cfg(feature = "trace_computation")] {
-      println!("Labels:");
-      for (f, a) in self.labels.iter(){
-        println!("\t{} -> {}", f, a);
-      }
-      println!();
-    }
-
     self.ip   = 0;
     self.fail = false;
     // In M_1, query code always appears first, while everything else is fact code.
     self.query = true;
 
-    let mut words = DoubleWord { low: 0, high: 0 };
+    let mut instruction;
+
     loop {
       if self.ip >= self.code.len() {
         // Either a `Halt` instruction was executed, or we ran out of bytecode to run.
         break;
       }
-      words.low = self.code[self.ip];
 
-      let encoded = match is_double_word_instruction(&words.low) {
-
-        true if self.ip + 1 < self.code.len() => {
-          words.high = self.code[self.ip + 1];
-          // We increment `ip` by the size of the current instruction before we execute the
-          // instruction. That way the instruction has an opportunity to change control flow.
-          self.ip += 2;
-          Bytecode::DoubleWord(words)
-        }
-
-        true => {
-          // Needs another word, but there are no more.
-          panic!("Error: Unexpectedly ran out of bytecode.")
-        }
-
-        false => {
-          self.ip += 1; // See above comment.
-          Bytecode::Word(words.low)
-        }
-
-      };
-
-      let instruction: Instruction =
-        match try_decode_instruction(&encoded) {
-
-          Some(i @ Instruction::Nullary(Operation::Proceed)) => {
-            // End of procedure
-            // M_2 only finds at most one success, as there is at most one fact for a given head.
-            if !self.fail && self.query == false {
-
-              #[cfg(not(feature = "trace_computation"))]
-                {
-                  let term = self.memory_to_term(&Address::Register(1));
-                  println!("{}\n", term.as_expression_string());
-                }
-
-              println!("TRUE");
-              return;
-            }
-            self.fail = false;
-            self.query = false;
-            i
-          },
-
-          Some(i) => i,
-
-          None => {
-            eprintln!("Could not decode instruction: ({:X}, {:X})", words.low, words.high);
-            panic!();
-          }
-        };
-
+      instruction = self.fetch_instruction();
+      // We increment `ip` by the size of the current instruction before we execute the
+      // instruction. That way the instruction has an opportunity to change control flow.
+      self.ip += instruction.size();
       self.exec(&instruction);
 
       // For M_1, every procedure fails to unify immediately at the atom's
@@ -702,8 +713,8 @@ impl WVM {
       if self.fail {
         // unification failed, skip the rest of the procedure.
         #[cfg(feature = "trace_computation")] println!("EARLY EXIT");
-        self.fail = false;
         self.proceed();
+        self.fail = false;
       }
 
       #[cfg(feature = "trace_computation")] println!("{}", self);
@@ -755,7 +766,7 @@ impl WVM {
           UnifyVariable => { self.unify_variable(address);}
           UnifyValue    => { self.unify_value(address);   }
           Call          => { self.call(address);          }
-          _             => { unreachable ! ("Error: The opcode {} was decoded as {}.", opcode, instruction); }
+          _             => { unreachable!("Error: The opcode {} was decoded as {}.", opcode, instruction); }
         }
       }
       Instruction::Unary { opcode, argument: Argument::Word(word) } => {
@@ -798,10 +809,10 @@ lazy_static! {
 impl Display for WVM {
 
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    let h_table = WVM::make_register_table("HEAP", &self.heap,
-                                           self.hp, 0);
-    let x_table = WVM::make_register_table("X", &self.registers,
-                                           self.rp, 1);
+    let h_table = WVM::make_memory_table("HEAP", &self.heap,
+                                         self.hp, 0);
+    let x_table = WVM::make_memory_table("X", &self.registers,
+                                         self.rp, 1);
 
 
     let mut combined_table = table!([h_table, x_table]);

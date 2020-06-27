@@ -104,10 +104,10 @@ impl Cell {
     match self{
       | Cell::REF(address)
       | Cell::STR(address) => {
-        (address.enc() << 8) + self.tag()
+        (address.enc() << 8) | self.tag()
       }
       Cell::Functor(functor) => {
-        functor.enc()
+        (functor.enc() << 8) | self.tag()
       }
       Cell::Structure(_) => {
         unreachable!("Error: Cannot encode a `Cell::Structure`.")
@@ -125,7 +125,7 @@ impl Cell {
       Ok(CellType::Empty)   => Some(Cell::Empty),
 
       Ok(CellType::STR)     => {
-        let address = match Address::try_decode(tag >> 8) {
+        let address = match Address::try_decode(word >> 8) {
           Some(a) => a,
           None => {
             return None;
@@ -135,7 +135,7 @@ impl Cell {
       },
 
       Ok(CellType::REF)     => {
-        let address = match Address::try_decode(tag >> 8) {
+        let address = match Address::try_decode(word >> 8) {
           Some(a) => a,
           None => {
             return None;
@@ -145,11 +145,12 @@ impl Cell {
       },
 
       Ok(CellType::Functor) => {
-        Some(Cell::Functor(Functor::dec(tag >> 8)))
+        Some(Cell::Functor(Functor::dec(word >> 8)))
       },
 
       _                => {
-        eprintln!("Error: Could not decode the word as a cell value: {:X}", word);
+        eprintln!("Error: Could not decode the word as a cell value: 0x{:0>8X}  tag: {}", word,
+                  tag);
         None
       }
 
