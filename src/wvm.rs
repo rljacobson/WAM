@@ -38,6 +38,7 @@ pub struct WVM {
   // Symbol table mapping line labels to their address in code memory.
   labels          : Vec<(Functor, Address)>,
   assembly_buffer : String, // String buffer for emitted code text
+  variable_bindings: Vec<(DefaultAtom, Address)>,
 }
 
 impl WVM {
@@ -87,16 +88,16 @@ impl WVM {
     }
   }
 
-  /*
+
   fn print_bindings(&self){
-    for(var, address) in &self.variable_assignments{
+    for(var, address) in &self.variable_bindings{
       let cell_address = self.dereference(&address);
       let term = self.memory_to_term(&cell_address);
 
-      println!("{:>10} = {}", var, term.as_expression_string());
+      println!("{:>10} = {}", var, term.expression_string());
     }
   }
-  */
+
 
 
   fn make_memory_table(
@@ -169,6 +170,7 @@ impl WVM {
 
       labels         :  Vec::new(),
       assembly_buffer:  String::new(),
+      variable_bindings: Vec::new(),
     }
   }
 
@@ -178,6 +180,7 @@ impl WVM {
     std::mem::swap(&mut new_vm.code,            &mut compilation.code           );
     std::mem::swap(&mut new_vm.labels,          &mut compilation.labels         );
     std::mem::swap(&mut new_vm.assembly_buffer, &mut compilation.assembly_buffer);
+    std::mem::swap(&mut new_vm.variable_bindings, &mut compilation.variable_bindings);
     new_vm
   }
 
@@ -620,11 +623,12 @@ impl WVM {
       #[cfg(not(feature = "trace_computation"))]
       {
         let term = self.memory_to_term(&Address::Register(1));
-        println!("{}\n", term.as_expression_string());
+        println!("{}\n", term.expression_string());
       }
 
       // Unified successfully.
       // ToDo: Success should be identified somewhere more appropriate.
+      self.print_bindings();
       println!("TRUE");
       return;
     }
@@ -850,7 +854,7 @@ impl Display for WVM {
       write!(f, "{}", combined_table)
     } else {
       let term = self.memory_to_term(&Address::Register(1));
-      write!(f, "{}\n{}\n", combined_table, term.as_expression_string())
+      write!(f, "{}\n{}\n", combined_table, term.expression_string())
     }
   }
 }

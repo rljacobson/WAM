@@ -21,6 +21,8 @@
 use std::cell::RefCell;
 use std::collections::HashSet;
 
+use string_cache::DefaultAtom;
+
 use crate::address::*;
 use crate::cell::*;
 use crate::functor::*;
@@ -36,6 +38,7 @@ pub struct Compilation{
   // Symbol table mapping line labels to their address in code memory.
   pub labels          : Vec<(Functor, Address)>,
   pub assembly_buffer : String, // String buffer for emitted code text
+  pub variable_bindings: Vec<(DefaultAtom, Address)>,
 }
 
 impl Compilation {
@@ -47,7 +50,8 @@ impl Compilation {
     let mut compilation = Compilation{
       code            : Vec::new(),
       labels          : Vec::new(),
-      assembly_buffer : "".to_string()
+      assembly_buffer : "".to_string(),
+      variable_bindings: Vec::new(),
     };
 
     let result = compilation.compile_driver(text, to_assembly);
@@ -179,14 +183,15 @@ impl Compilation {
     This function assumes that the term has been prepared with `flatten_term`.
   */
   fn compile_tokens(
-    &mut self, ast: &Term,
-    is_program: bool,
-    to_assembly: bool
-  )
+      &mut self, ast: &Term,
+      is_program: bool,
+      to_assembly: bool
+    )
   {
 
     // Flatten and order the terms, converting to `Cell`s in the process.
-    let (cell_vec, mut order): (CellVec, Vec<usize>) = ast.flatten_term();
+    let (cell_vec, mut order, mut vars) = ast.flatten_term();
+    self.variable_bindings.append(&mut vars);
     // Programs are ordered reverse of queries.
     if is_program {
       order.reverse();
@@ -334,7 +339,8 @@ impl Compilation {
     let mut compilation = Compilation{
       code            : Vec::new(),
       labels          : Vec::new(),
-      assembly_buffer : "".to_string()
+      assembly_buffer : "".to_string(),
+      variable_bindings: Vec::new(),
     };
 
     match compilation.assembler_driver(text) {

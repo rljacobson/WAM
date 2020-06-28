@@ -44,7 +44,7 @@ impl Display for Term{
 impl Term{
 
   /// Returns a string representation of the term, e.g. `"h(f(f(a)), f(a))"`.
-  pub fn as_expression_string(&self) -> String{
+  pub fn expression_string(&self) -> String{
     match self {
 
       Term::Structure{ functor, args } => {
@@ -53,7 +53,7 @@ impl Term{
         }else {
           let mut buffer = format!("{}(", functor.name);
           for (i, term) in args.iter().enumerate(){
-            buffer.push_str(term.as_expression_string().as_str());
+            buffer.push_str(term.expression_string().as_str());
             if i != args.len() - 1 {
               buffer.push_str(", ");
             }
@@ -115,8 +115,7 @@ impl Term{
 
 
   /**
-    Computes the flattened form expressed of the given Term AST. The flattened form
-    of the AST contains only the non-variable registers.
+    Computes the flattened form expressed of the given Term AST.
 
     Example:
       The registers containing the flattened form of `p(Z, h(Z, W), f(W))` are
@@ -128,12 +127,16 @@ impl Term{
         X5 = W
         ```
 
-    Note that the variable registers may be omitted without loosing
-    semantic meaning. We can't simultaneously compile the term,
-    because the flattened form needs to be ordered in a particular way.
+    Note that the variable registers may be omitted without loosing semantic meaning. However, we
+    record the variable bindings so that we can report what each variable is ultimately bound to
+    upon successful unification.
+
+    Despite appearances, we can't simultaneously compile the term, because the flattened form needs
+    to be ordered in a particular way for compilation.
   */
-  pub fn flatten_term(&self) -> (CellVec, Vec<usize>){
+  pub fn flatten_term(&self) -> (CellVec, Vec<usize>, Vec<(DefaultAtom, Address)>){
     let mut seen: HashMap<&Term, usize> = HashMap::new();
+    let mut vars: Vec<(DefaultAtom, Address)> = Vec::new();
 
     // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
     // term its own register.
@@ -164,8 +167,10 @@ impl Term{
           registers[*register] = Cell::Structure(new_args);
         },
 
-        Term::Variable(_) =>{
-          registers[*register] = Cell::REF(Address::from_reg_idx(*register));
+        Term::Variable(name) =>{
+          let address = Address::from_reg_idx(*register);
+          vars.push((name.clone(), address.clone()));
+          registers[*register] = Cell::REF(address);
         }
 
         _t => {
@@ -176,11 +181,10 @@ impl Term{
       };
     }
 
-
     let order = Self::order_registers(&registers);
 
     // order
-    (registers, order)
+    (registers, order, vars)
   }
 
 
