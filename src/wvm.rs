@@ -627,7 +627,8 @@ impl WVM {
       }
 
       // Unified successfully.
-      // ToDo: Success should be identified somewhere more appropriate.
+      // ToDo: Success should be identified somewhere more appropriate. It's not straightforward,
+      // because success only happens on execution of proceed.
       self.print_bindings();
       println!("TRUE");
       return;
@@ -720,6 +721,8 @@ impl WVM {
         break;
       }
 
+      #[cfg(feature = "trace_computation")] println!("{}", self);
+
       instruction = self.fetch_instruction();
       // We increment `ip` by the size of the current instruction before we execute the
       // instruction. That way the instruction has an opportunity to change control flow.
@@ -734,8 +737,6 @@ impl WVM {
         self.proceed();
         self.fail = false;
       }
-
-      #[cfg(feature = "trace_computation")] println!("{}", self);
     } // end loop over instructions in procedure
 
     if self.fail {

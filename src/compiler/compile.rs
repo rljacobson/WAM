@@ -191,10 +191,12 @@ impl Compilation {
 
     // Flatten and order the terms, converting to `Cell`s in the process.
     let (cell_vec, mut order, mut vars) = ast.flatten_term();
-    self.variable_bindings.append(&mut vars);
     // Programs are ordered reverse of queries.
     if is_program {
       order.reverse();
+    } else{
+      // Store variable bindings for a query.
+      self.variable_bindings.append(&mut vars);
     }
 
     // Contains the register arguments we've seen before.
