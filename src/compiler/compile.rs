@@ -234,9 +234,11 @@ impl Compilation {
       } // end if seen address before
     };
 
-    // Bookkeeping for the outermost term, which defines the procedure/query. The first
-    // instruction we are about to push onto `self.code` will be the first instruction of
-    // `procedure`. No checking is done to see if there already is a procedure with this name.
+    /*
+      Bookkeeping for the outermost term, which defines the procedure/query. The first
+      instruction we are about to push onto `self.code` will be the first instruction of
+      `procedure`. No checking is done to see if there already is a procedure with this name.
+    */
     let procedure_address = Address::Code(self.code.len() as AddressNumberType);
     let functor: Functor  = cell_vec[order[0]].extract_functor().unwrap();
     // The first cell is guaranteed to be a `Cell::Structure`, so `unwrap()` is safe.

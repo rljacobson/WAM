@@ -43,6 +43,7 @@ impl Display for Term{
 
 impl Term{
 
+  /// Returns a string representation of the term, e.g. `"h(f(f(a)), f(a))"`.
   pub fn as_expression_string(&self) -> String{
     match self {
 
@@ -146,7 +147,7 @@ impl Term{
     registers.resize(seen.len(), Cell::Empty);
 
     // Every term has a register assignment. Now populate the "registers".
-    for (term, register) in seen.iter(){
+    for (&term, register) in seen.iter(){
       match term{
 
         Term::Structure { functor, args } => {

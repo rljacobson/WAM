@@ -29,7 +29,7 @@ fn main() {
   println!("Computation Tracing ENABLED");
 
   /*
-    It is important in M_1 that no two facts have the same head atom. Otherwise, the failure of
+    It is important in M_2 that no two facts have the same head atom. Otherwise, the failure of
     the first version of the atom will have changed the registers because of its partial
     unification, and the matching program will not be matching against the original query but
     rather a query partially unified with some other program.

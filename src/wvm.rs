@@ -87,6 +87,18 @@ impl WVM {
     }
   }
 
+  /*
+  fn print_bindings(&self){
+    for(var, address) in &self.variable_assignments{
+      let cell_address = self.dereference(&address);
+      let term = self.memory_to_term(&cell_address);
+
+      println!("{:>10} = {}", var, term.as_expression_string());
+    }
+  }
+  */
+
+
   fn make_memory_table(
       name      : &str,
       registers : &[Word],
@@ -182,7 +194,7 @@ impl WVM {
   }
 
 
-  /// Performs one step of `dereference`, what C programmers think of as dereferencing.
+  /// Returns the value stored at `ptr`.
   fn value_at(&self, ptr: &Address) -> Cell{
     Cell::try_decode(self.word_at(ptr)).unwrap()
   }
@@ -611,6 +623,8 @@ impl WVM {
         println!("{}\n", term.as_expression_string());
       }
 
+      // Unified successfully.
+      // ToDo: Success should be identified somewhere more appropriate.
       println!("TRUE");
       return;
     }

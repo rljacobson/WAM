@@ -110,7 +110,9 @@ impl<'a> Parser<'a> {
     }
   }
 
-
+  /**
+    Parses one term
+  */
   fn parse_aux(&mut self) -> Result<Option<Term>, Vec<String>> {
     let mut next_char    :  char;
     let mut local_errors :  Vec<String>  = Vec::new();

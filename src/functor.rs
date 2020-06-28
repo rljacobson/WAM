@@ -36,9 +36,7 @@ pub struct Functor {
   pub arity : ArityType,
   /*
   ToDo: It is annoying to have to carry around the arity when most of the
-        time the functor is packaged with its arguments. The problem is,
-        it's separated from its arguments during tokenization. Does it need
-        to be?
+        time the functor is packaged with its arguments. Does it need to?
   */
 }
 

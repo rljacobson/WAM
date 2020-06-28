@@ -107,7 +107,7 @@ impl<'d> CharIter<'d>{
   {
     // We must account for the fact that the "first" `char` might be in `next_char`.
     if let Some(next_char) = self.next_char{
-      // ToDo: Need yo iterate over matched chars.
+      // ToDo: Need to iterate over matched chars.
 
       if next_char.is_whitespace(){
         self.increment_location(Some(next_char));
