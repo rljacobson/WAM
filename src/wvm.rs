@@ -68,7 +68,7 @@ impl WVM {
           args.push(self.memory_to_term(&(functor_address + i as usize)));
         }
 
-        Term::Structure {
+        Term::Predicate {
           functor,
           args
         }
@@ -694,15 +694,12 @@ impl WVM {
     `ip` is reset, and the `fail` flag is set to `false` before execution begins. Otherwise,
     the caller is responsible for setting/resetting the vm registers and memory stores.
 
-    In M_1, every fact is labeled with a functor and has a code address at which the code
-    associated with the fact begins. These labeled procedures, as we'll call them, are
+    In M_2, every clause is labeled with a functor and has a code address at which the code
+    associated with the clause begins. These labeled procedures, as we'll call them, are
     stored in the WVM::Labels array in the order in which they were compiled, with the
     query appearing first. Then `run` iterates over each label, calling them in turn.
     `Proceed` signals end of procedure, reporting success/failure. Upon failure, `ip` is
     set to the next label. We also bail out of a procedure early if we fail partway through.
-
-    The `Proceed` instruction is just for show in M_1, as the bytecode could just as easily run
-    linearly. The `Call` instruction is also just for show. It is functional but never used.
 
     If we cared about speed, we would optimize this function and the functions it calls as much
     as possible. But we don't care about speed. In fact, it's already really fast.
@@ -710,7 +707,7 @@ impl WVM {
   pub fn run(&mut self){
     self.ip   = 0;
     self.fail = false;
-    // In M_1, query code always appears first, while everything else is fact code.
+    // In M_2, query code always appears first, while everything else is fact code.
     self.query = true;
 
     let mut instruction;
@@ -729,7 +726,7 @@ impl WVM {
       self.ip += instruction.size();
       self.exec(&instruction);
 
-      // For M_1, every procedure fails to unify immediately at the atom's
+      // For M_2, every procedure fails to unify immediately at the atom's
       // head except at most one. If that one unifies, `self.fail` is false.
       if self.fail {
         // unification failed, skip the rest of the procedure.

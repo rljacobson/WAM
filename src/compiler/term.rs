@@ -1,6 +1,6 @@
 //! The abstract syntax tree type for programs and queries.
 
-use std::collections::{VecDeque, HashMap, HashSet};
+use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
@@ -8,36 +8,45 @@ use string_cache::DefaultAtom;
 
 use crate::functor::*;
 use crate::address::*;
-use crate::cell::*;
 
 pub type RcTerm = Rc<Term>;
 pub type TermVec = Vec<Term>;
 
 
-const MAXIMUM_ORDER_ATTEMPTS: usize = 200;
-
 // region Term declarations and definitions
 
-/// Abstract representation
+/// Abstract Syntax Representation
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub enum Term {
   /// An interned string staring with an uppercase letter.
   Variable(DefaultAtom),
-  /// Structures hold functors. Constants are represented as functors of arity 0, so `args` might
-  /// be an empty `Vec`.
-  Structure {
+
+  /// A `Predicate` is a functor: `f(stuff)`. Constants are represented as functors
+  /// of arity 0, so `args` might be an empty `Vec`. Note that a fact is a single predicate
+  /// followed by a period: `f(stuff).`.
+  Predicate {
     functor : Functor,
     args    : TermVec
   },
-  /// Denoted `?-q` ("What `q`"), a top-level term for queries. Anything else is a program.
-  Query(RcTerm),
-  /// Flattened terms only have registers for arguments.
+
+  /// `Rule` of the form `predicate :- predicate, predicate, ..., predicate.`. A so-called chain
+  /// is a `Rule` in which `goals` contains a single element. The `predicate` is always a `Fact`.
+  Rule{
+    predicate: Box<Term>, //RcTerm?
+    goals: TermVec
+  },
+
+  /// Denoted `?-q_1, q_2, .., q_m` ("What `q`"), a top-level term for queries. Anything else is a
+  /// program.
+  Query(TermVec),
+
+  /// Flattened terms only have register pointers for arguments.
   Ref(Address)
 }
 
 impl Display for Term{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-    write!(f, "{}", self.fmt_aux(&"", &""))
+    write!(f, "{}", self.fmt_aux(&"".to_string(), &"".to_string()))
   }
 }
 
@@ -47,7 +56,9 @@ impl Term{
   pub fn expression_string(&self) -> String{
     match self {
 
-      Term::Structure{ functor, args } => {
+      Term::Variable(name) => name.to_string(),
+
+      Term::Predicate { functor, args } => {
         if args.is_empty() {
           format!("{}", functor.name)
         }else {
@@ -63,206 +74,114 @@ impl Term{
         }
       }
 
-      Term::Variable(name) => name.to_string(),
+      Term::Rule { predicate, goals } => {
+        if goals.is_empty() {
+          // Should never happen unless we redesign a fact as a `Rule` with empty RHS.
+          format!("{}.", predicate)
+        }else {
+          let mut buffer = format!("{} :- ", predicate);
+          for (i, term) in goals.iter().enumerate(){
+            buffer.push_str(term.expression_string().as_str());
+            if i != goals.len() - 1 {
+              buffer.push_str(", ");
+            }
+          }
+          buffer.push('.');
+          buffer
+        }
+      }
+
+      Term::Query(goals) => {
+        if goals.is_empty() {
+          // Should never happen unless we redesign a fact as a `Rule` with empty RHS.
+          "?-.".to_string()
+        }else {
+          let mut buffer = "?- ".to_string();
+          for (i, term) in goals.iter().enumerate(){
+            buffer.push_str(term.expression_string().as_str());
+            if i != goals.len() - 1 {
+              buffer.push_str(", ");
+            }
+          }
+          buffer.push('.');
+          buffer
+        }
+      }
 
       Term::Ref(address) => address.to_string(),
 
-      _ => "??".to_string()
     }
   }
 
-  fn fmt_aux(&self, prefix: &str, child_prefix: &str) -> String {
+  /// A helper for `fmt_aux`, to keep things DRY.
+  fn fmt_tree_term(buffer: &mut String, children: &TermVec,
+                   child_prefix: &String, prefix_space: &String) {
+    for (i, next) in children.iter().enumerate() {
+      if i != children.len() - 1 {
+        buffer.push_str(
+          next.fmt_aux(
+            &format!("{}{}{}", child_prefix, prefix_space, "├── "),
+            &format!("{}{}{}", child_prefix, prefix_space, "│   ")
+          ).as_str()
+        );
+        buffer.push('\n');
+      } else {
+        buffer.push_str(
+          next.fmt_aux(
+            &format!("{}{}{}", child_prefix, prefix_space, "└── "),
+            &format!("{}{}{}", child_prefix, prefix_space, "    ")
+          ).as_str()
+        );
+      }
+    };
+  }
+
+  fn fmt_aux(&self, prefix: &String, child_prefix: &String) -> String {
     match self {
-      Term::Structure{ functor, args } => {
-        let mut buffer =
+
+      Term::Variable(c)  => format!("{}Variable<{}>", prefix, c),
+
+      Term::Predicate { functor, args } => {
+        let mut self_token =
           if args.is_empty() {
             format!("{}Constant<{}>", prefix, functor.name)
           } else{
             format!("{}Functor<{}(…)>\n", prefix, functor)
           };
-
-        for (i, next) in args.iter().enumerate() {
-          if i != args.len() - 1 {
-            buffer.push_str(
-              next.fmt_aux(
-                &format!("{}{}", child_prefix, "            ├── "),
-                &format!("{}{}", child_prefix, "            │   ")
-              ).as_str()
-            );
-            buffer.push('\n');
-          } else {
-            buffer.push_str(
-              next.fmt_aux(
-                &format!("{}{}", child_prefix, "            └── "),
-                &format!("{}{}", child_prefix, "                ")
-              ).as_str()
-            );
-          }
-        };
-        buffer
+        Self::fmt_tree_term(&mut self_token, args, child_prefix, &" ".repeat(12));
+        self_token
       }
-      Term::Variable(c) => {
-        format!("{}Variable<{}>", prefix, c)
+
+      Term::Rule { predicate, goals } => {
+        //                     "      ┗━━━━━┿━━ "
+        //                     "            ├── "
+        let mut self_token = format!(
+          "{}Rule< … :- ….>\n",
+          prefix,
+        );
+        self_token.push_str(
+          predicate.fmt_aux(
+            &format!("{}      ┗━━━━┿━━ ", prefix),
+            &format!("{}{}{}", " ".repeat(11), "│", " ".repeat(3))
+          ).as_str()
+        );
+        self_token.push('\n');
+        Self::fmt_tree_term(&mut self_token, goals,
+                            child_prefix,
+                            &" ".repeat(11));
+        self_token
+      }
+
+      Term::Query(goals) => {
+        let mut self_token = format!("{}Query<…>\n", prefix);
+        Self::fmt_tree_term(&mut self_token, goals, child_prefix, &" ".repeat(6));
+        self_token
       },
-      Term::Query(inner) => {
-        format!("{}Query<{}>", prefix, inner)
-      },
-      Term::Ref(address) => {
-        format!("{}Reference<{}>", prefix, address)
-      }
+
+      Term::Ref(address) => format!("{}Reference<{}>", prefix, address)
+
+
     }
-  }
-
-
-  /**
-    Computes the flattened form expressed of the given Term AST.
-
-    Example:
-      The registers containing the flattened form of `p(Z, h(Z, W), f(W))` are
-        ```
-        X1 = p(X2, X3, X4)
-        X2 = Z
-        X3 = h(X2, X5)
-        X4 = f(X5)
-        X5 = W
-        ```
-
-    Note that the variable registers may be omitted without loosing semantic meaning. However, we
-    record the variable bindings so that we can report what each variable is ultimately bound to
-    upon successful unification.
-
-    Despite appearances, we can't simultaneously compile the term, because the flattened form needs
-    to be ordered in a particular way for compilation.
-  */
-  pub fn flatten_term(&self) -> (CellVec, Vec<usize>, Vec<(DefaultAtom, Address)>){
-    let mut seen: HashMap<&Term, usize> = HashMap::new();
-    let mut vars: Vec<(DefaultAtom, Address)> = Vec::new();
-
-    // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
-    // term its own register.
-    let terms: TermIter = TermIter::new(self);
-    for term in terms{
-      let new_address = seen.len();
-      seen.entry(&term).or_insert(new_address);
-    }
-
-    let mut registers = CellVec::with_capacity(seen.len());
-    registers.resize(seen.len(), Cell::Empty);
-
-    // Every term has a register assignment. Now populate the "registers".
-    for (&term, register) in seen.iter(){
-      match term{
-
-        Term::Structure { functor, args } => {
-          // Create a vector of cells out of the argument terms, translating
-          // those terms into `Cell::REF`'s that point to the register assigned
-          // to the terms.
-          let mut new_args = CellVec::with_capacity(args.len() + 1);
-          new_args.push(Cell::Functor(functor.clone()));
-          new_args.extend(args.iter().map(
-            |t| Cell::REF(
-              Address::from_reg_idx(*seen.get(t).unwrap())
-            )
-          ));
-          registers[*register] = Cell::Structure(new_args);
-        },
-
-        Term::Variable(name) =>{
-          let address = Address::from_reg_idx(*register);
-          vars.push((name.clone(), address.clone()));
-          registers[*register] = Cell::REF(address);
-        }
-
-        _t => {
-          // This should never happen in correct code during compilation.
-          panic!("Error: Illegal term encountered: {}", _t);
-        }
-
-      };
-    }
-
-    let order = Self::order_registers(&registers);
-
-    // order
-    (registers, order, vars)
-  }
-
-
-  /**
-    Orders the registers of a flattened term so that registers are assigned
-    to before they are used (appear on the RHS of an assignment). This
-    function assumes that the registers already contain a flattened term.
-
-    > [F]or left-to-right code generation to be well-founded, it is necessary
-    > to order a flattened query term to ensure that a register name may
-    > not be used in the right-hand side of an assignment (viz., as a subterm)
-    > before its assignment, if it has one (viz., being the left-hand side).
-  */
-  fn order_registers(flat_terms: &CellVec) -> Vec<usize>{
-    // Contains the register arguments we've seen before.
-    let mut seen    : HashSet<Address> = HashSet::with_capacity(flat_terms.len());
-    let mut unseen  : HashSet<usize>   = HashSet::new();
-    // The vector holding the result
-    let mut ordered : Vec<usize>       = Vec::with_capacity(flat_terms.len());
-
-    // First collect which registers need to be ordered, marking registers containing variables
-    // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s.
-    for (index, cell) in flat_terms.iter().enumerate(){
-      match cell {
-
-        Cell::REF(address) => {
-          // Once a term is flattened, the variables in the term can be replaced with the
-          // register associated to the variable. Thus, we ignore variables.
-          seen.insert(*address);
-        },
-
-        Cell::Structure(_) =>{
-          unseen.insert(index);
-        },
-
-        _t => {
-          unreachable!(
-            "Error: Encountered a non-variable/non-struct cell after flattening a term: {}.",
-            _t
-          );
-        }
-
-      }
-    }
-
-    // Now try to order the registers to maintain the invariant in the doc string.
-    // Limit to a reasonable maximum number of loops to prevent infinite looping.
-    for _loop_count in 0..MAXIMUM_ORDER_ATTEMPTS {
-      let next_regs: HashSet<usize> =
-        unseen.iter().filter_map(
-          |index| {
-            match flat_terms[*index].extract_arg_addresses() {
-
-              Some(address_set)
-              if address_set.is_subset(&seen) => {
-                Some(*index)
-              }
-
-              _v => {
-                None
-              }
-
-            }
-          }
-        ).collect();
-
-      for reg in next_regs{
-        ordered.push(reg);
-        unseen.remove(&reg);
-        seen.insert(Address::from_reg_idx(reg));
-      }
-
-      if unseen.is_empty() {
-        break;
-      }
-    }
-
-    ordered
   }
 
 }
@@ -296,7 +215,7 @@ impl<'t> Iterator for TermIter<'t>{
       Some(term) => {
         match term {
 
-          Term::Structure{args, ..} => {
+          Term::Predicate {args, ..} => {
             self.terms.extend(args.iter());
             option_term
           },

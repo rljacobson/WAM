@@ -34,10 +34,10 @@ fn main() {
     unification, and the matching program will not be matching against the original query but
     rather a query partially unified with some other program.
   */
-  let text = "\t?-p(Z,h(Z,W),f(W))
-  \tj(f(Y), r(X), f(P, Q))
-  \ty(f(Y), r(X), f(P, Q))
-  \tp(f(X), h(Y, f(a)), Y)";
+  let text = "\t?-p(Z,h(Z,W),f(W)), q(Z, W).
+  \tb(X, P):-j(f(Y), r(X), f(P, Q)).
+  \ty(f(Y), r(X), f(P, Q)).
+  \tp(f(X), h(Y, f(a)), Y).";
   println!("Input Expression: \n{}\n", text);
 
   /*
@@ -52,12 +52,11 @@ fn main() {
   */
 
   // Parser:
-  /*
-  let result = parser::parse(text);
+  let result = compiler::parse(text);
   match result {
-    Ok((programs, queries)) => {
-      println!("\nQueries:\n");
-      for q in queries{
+    Ok((programs, query)) => {
+      println!("\nQuery:\n");
+      if let Some(q) = query {
         println!("{}", q);
       }
       println!("Programs:\n");
@@ -68,8 +67,8 @@ fn main() {
 
     Err(_) => {}
   }
-  */
 
+  /*
   // Compiler:
   match Compilation::compile(text, true) {
     Some(mut compilation) => {
@@ -78,10 +77,10 @@ fn main() {
     },
     None => {
       // The errors should have already been printed.
-      println!("Failed to compile, but no error message.");
+      println!("Failed to compile.");
     }
   };
-
+  */
   // Assembly:
   /*
   let path = "/Users/rljacobson/Development/wam/ignore/assembly.txt";

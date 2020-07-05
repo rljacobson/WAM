@@ -19,7 +19,7 @@
 */
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashSet, HashMap};
 
 use string_cache::DefaultAtom;
 
@@ -31,8 +31,10 @@ use super::term::*;
 use crate::compiler::parser::parse as parse_source_code;
 use crate::functor::intern_functor;
 
+const MAXIMUM_ORDER_ATTEMPTS: usize = 200;
+
 /// A `Compilation` is the result of executing `Compilation::compile(source)` and may contain
-/// binary bytecode, assembly code, and/or line labels.
+/// binary bytecode, assembly code, variable bindings, and/or line labels.
 pub struct Compilation{
   pub code            : Vec<Word>,  // Code memory, a binary memory store
   // Symbol table mapping line labels to their address in code memory.
@@ -86,7 +88,7 @@ impl Compilation {
     let compilation_time = std::time::Instant::now();
 
     // Parse the text into a `Term`, which is a tree structure in general.
-    let (atoms, queries) =
+    let (atoms, query) =
       match parse_source_code(text){
         Ok(tuple) => tuple,
         Err(_) => {
@@ -96,9 +98,9 @@ impl Compilation {
       };
 
     // Queries
-    for ast in queries{
-      self.compile_tokens(&ast, false, to_assembly);
-    }
+    // if let Some(Term::Query(term_vec)) = query {
+    //   self.compile_tokens(&ast, false, to_assembly);
+    // }
     // Programs
     for ast in atoms{
       self.compile_tokens(&ast, true, to_assembly);
@@ -190,7 +192,7 @@ impl Compilation {
   {
 
     // Flatten and order the terms, converting to `Cell`s in the process.
-    let (cell_vec, mut order, mut vars) = ast.flatten_term();
+    let (cell_vec, mut order, mut vars) = flatten_term(ast);
     // Programs are ordered reverse of queries.
     if is_program {
       order.reverse();
@@ -437,4 +439,156 @@ impl Compilation {
       } // end match DoubleWord
     } // end match instruction
   } // end emit_bytecode
+}
+
+
+/**
+  Computes the flattened form expressed of the given Term AST.
+
+  Example:
+    The registers containing the flattened form of `p(Z, h(Z, W), f(W))` are
+      ```
+      X1 = p(X2, X3, X4)
+      X2 = Z
+      X3 = h(X2, X5)
+      X4 = f(X5)
+      X5 = W
+      ```
+
+  Note that the variable registers may be omitted without loosing semantic meaning. However, we
+  record the variable bindings so that we can report what each variable is ultimately bound to
+  upon successful unification.
+
+  Despite appearances, we can't simultaneously compile the term, because the flattened form needs
+  to be ordered in a particular way for compilation.
+*/
+pub fn flatten_term(term: &Term) -> (CellVec, Vec<usize>, Vec<(DefaultAtom, Address)>){
+  let mut seen: HashMap<&Term, usize> = HashMap::new();
+  let mut vars: Vec<(DefaultAtom, Address)> = Vec::new();
+
+  // We visit the AST breadth first, adding new symbols to `seen` as we go. This assigns each
+  // term its own register.
+  let terms: TermIter = TermIter::new(term);
+  for term in terms{
+    let new_address = seen.len();
+    seen.entry(&term).or_insert(new_address);
+  }
+
+  let mut registers = CellVec::with_capacity(seen.len());
+  registers.resize(seen.len(), Cell::Empty);
+
+  // Every term has a register assignment. Now populate the "registers".
+  for (&term, register) in seen.iter(){
+    match term{
+
+      Term::Predicate { functor, args } => {
+        // Create a vector of cells out of the argument terms, translating
+        // those terms into `Cell::REF`'s that point to the register assigned
+        // to the terms.
+        let mut new_args = CellVec::with_capacity(args.len() + 1);
+        new_args.push(Cell::Functor(functor.clone()));
+        new_args.extend(args.iter().map(
+          |t| Cell::REF(
+            Address::from_reg_idx(*seen.get(t).unwrap())
+          )
+        ));
+        registers[*register] = Cell::Structure(new_args);
+      },
+
+      Term::Variable(name) =>{
+        let address = Address::from_reg_idx(*register);
+        vars.push((name.clone(), address.clone()));
+        registers[*register] = Cell::REF(address);
+      }
+
+      _t => {
+        // This should never happen in correct code during compilation.
+        panic!("Error: Illegal term encountered: {}", _t);
+      }
+
+    };
+  }
+
+  let order = order_registers(&registers);
+
+  // order
+  (registers, order, vars)
+}
+
+
+/**
+  Orders the registers of a flattened term so that registers are assigned
+  to before they are used (appear on the RHS of an assignment). This
+  function assumes that the registers already contain a flattened term.
+
+  > [F]or left-to-right code generation to be well-founded, it is necessary
+  > to order a flattened query term to ensure that a register name may
+  > not be used in the right-hand side of an assignment (viz., as a subterm)
+  > before its assignment, if it has one (viz., being the left-hand side).
+*/
+fn order_registers(flat_terms: &CellVec) -> Vec<usize>{
+  // Contains the register arguments we've seen before.
+  let mut seen    : HashSet<Address> = HashSet::with_capacity(flat_terms.len());
+  let mut unseen  : HashSet<usize>   = HashSet::new();
+  // The vector holding the result
+  let mut ordered : Vec<usize>       = Vec::with_capacity(flat_terms.len());
+
+  // First collect which registers need to be ordered, marking registers containing variables
+  // as seen. At the end, `unseen` is all `Cell::Structure`s, while `seen` is all `Cell::REF`s.
+  for (index, cell) in flat_terms.iter().enumerate(){
+    match cell {
+
+      Cell::REF(address) => {
+        // Once a term is flattened, the variables in the term can be replaced with the
+        // register associated to the variable. Thus, we ignore variables.
+        seen.insert(*address);
+      },
+
+      Cell::Structure(_) =>{
+        unseen.insert(index);
+      },
+
+      _t => {
+        unreachable!(
+          "Error: Encountered a non-variable/non-struct cell after flattening a term: {}.",
+          _t
+        );
+      }
+
+    }
+  }
+
+  // Now try to order the registers to maintain the invariant in the doc string.
+  // Limit to a reasonable maximum number of loops to prevent infinite looping.
+  for _loop_count in 0..MAXIMUM_ORDER_ATTEMPTS {
+    let next_regs: HashSet<usize> =
+    unseen.iter().filter_map(
+      |index| {
+        match flat_terms[*index].extract_arg_addresses() {
+
+          Some(address_set)
+          if address_set.is_subset(&seen) => {
+            Some(*index)
+          }
+
+          _v => {
+            None
+          }
+
+        }
+      }
+    ).collect();
+
+    for reg in next_regs{
+      ordered.push(reg);
+      unseen.remove(&reg);
+      seen.insert(Address::from_reg_idx(reg));
+    }
+
+    if unseen.is_empty() {
+      break;
+    }
+  }
+
+  ordered
 }
