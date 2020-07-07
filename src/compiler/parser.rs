@@ -30,37 +30,44 @@ zero-length argument list.
 */
 extern crate nom;
 
-use nom::{branch::alt, bytes::{
-  complete::{
+use nom::{
+  branch::alt,
+  bytes::complete::{
     is_not,
+    take_until,
+    take_while1,
     tag
-  }
-}, character::{
-  complete::{
-    char as one_char,
-    line_ending,
-    multispace0, alphanumeric0
   },
-}, combinator::{
-  map,
-  opt
-}, multi::{
-  separated_nonempty_list,
-}, sequence::{
-  delimited,
-  pair,
-  preceded,
-  separated_pair,
-  terminated,
-  tuple
-}, IResult, Err as NomErr};
+  character::complete::{
+    char as one_char,
+    alphanumeric0,
+    multispace1
+  },
+  combinator::{
+    recognize,
+    map,
+    opt
+  },
+  multi::{
+    separated_nonempty_list,
+    many0
+  },
+  sequence::{
+    delimited,
+    pair,
+    preceded,
+    separated_pair,
+    terminated,
+    tuple
+  },
+  error::ParseError,
+  Err as NomErr,
+  IResult
+};
 use string_cache::DefaultAtom;
 
 use crate::functor::{ArityType, Functor};
-
 use super::term::{Term, TermVec};
-use nom::bytes::complete::{take_while1};
-use nom::combinator::{recognize};
 
 struct Parser<'a>{
   text   : &'a str,
@@ -316,40 +323,65 @@ fn pvariable(text: &str) -> IResult<&str, Term>{
   )(text)
 }
 
+
+fn ws<'a, F: 'a, O, E: ParseError<&'a str>>(inner: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+  where
+  F: Fn(&'a str) -> IResult<&'a str, O, E>,
+{
+  move |i| {
+    delimited(
+      &pskip,
+      &inner,
+      &pskip
+    )(i)
+  }
+}
+
+
+fn wst<'a, F: 'a, O, E: ParseError<&'a str>>(inner: F) -> impl Fn(&'a str) -> IResult<&'a str, O, E>
+  where
+  F: Fn(&'a str) -> IResult<&'a str, O, E>,
+{
+  move |i| {
+    terminated(
+      &inner,
+      &pskip
+    )(i)
+  }
+}
+
+
+pub fn pskip<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E>
+{
+  map(
+    many0(
+      alt((map(multispace1, |_| ()), pinline_comment, peol_comment))
+    ),
+    |_| ()
+  )(i)
+}
+
 /*
-fn pstring(text: &str) -> IResult<&str, &str>{
-  delimited(
-    one_char('\''),
-    is_not('\''),
-    one_char('\'')
-  )(text)
-}
-
-fn pinteger(text: &str) -> IResult<&str, &str>{
-  take_while(char::is_digit)(text)
-}
+  <eol_comment> ::= '%' [^\n\r]*
 */
-
-
-pub fn ws<I, O, E: nom::error::ParseError<I>, F>(
-  inner: F,
-) -> impl Fn(I) -> IResult<I, O, E>
-  where
-  F: Fn(I) -> IResult<I, O, E>,
-  I: nom::InputTakeAtPosition,
-  <I as nom::InputTakeAtPosition>::Item: nom::AsChar + Clone,
+pub fn peol_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E>
 {
-  delimited(multispace0, inner, multispace0)
+  map(pair(one_char('%'), is_not("\n\r")),
+      |_| ()
+  )(i)
 }
 
-
-pub fn wst<I, O, E: nom::error::ParseError<I>, F>(
-  inner: F,
-) -> impl Fn(I) -> IResult<I, O, E>
-  where
-  F: Fn(I) -> IResult<I, O, E>,
-  I: nom::InputTakeAtPosition,
-  <I as nom::InputTakeAtPosition>::Item: nom::AsChar + Clone,
+/*
+  <eol_comment> ::= '%' [^\n\r]*
+*/
+pub fn pinline_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E>
 {
-  terminated(inner, multispace0)
+  map(
+    tuple((
+      tag("(*"),
+      take_until("*)"),
+      tag("*)")
+    )),
+    |_| () // Output is thrown away.
+  )(i)
 }
