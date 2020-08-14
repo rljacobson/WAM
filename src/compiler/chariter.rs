@@ -3,6 +3,7 @@
 use std::str::{Chars, pattern::Pattern};
 use std::str::pattern::Searcher;
 
+
 #[derive(Debug)]
 pub struct CharIter<'d> {
   chars      :   Chars<'d>,
@@ -10,6 +11,7 @@ pub struct CharIter<'d> {
   row        :  usize,
   column     :  usize
 }
+
 
 impl<'d> Iterator for CharIter<'d>{
   type Item = char;
@@ -31,6 +33,7 @@ impl<'d> Iterator for CharIter<'d>{
   } // end fn next
 }
 
+
 impl<'d> CharIter<'d>{
 
   pub fn new(text: &'d str) -> Self{
@@ -41,6 +44,7 @@ impl<'d> CharIter<'d>{
       column     :  1
     }
   }
+
 
   /// Returns the next character without consuming it or incrementing row/column.
   pub fn peek(&mut self) -> Option<char>{
@@ -56,9 +60,11 @@ impl<'d> CharIter<'d>{
     }
   }
 
+
   pub fn location(&self) -> (usize, usize) {
     return (self.row, self.column)
   }
+
 
   /// Passes next_char through while incrementing `self.row` or `self.column` as necessary.
   fn increment_location(&mut self, next_char: Option<char>) -> Option<char>{
@@ -80,14 +86,17 @@ impl<'d> CharIter<'d>{
     }
   }
 
+
   pub fn is_empty(&mut self) -> bool{
     self.peek() == None
   }
+
 
   /// Gives the underlying string slice.
   pub fn data(&self) -> &'d str {
     self.chars.as_str()
   }
+
 
   // We include several useful methods from `std::str`.
 
@@ -99,6 +108,7 @@ impl<'d> CharIter<'d>{
     let text: &'d str = self.data();
     text.starts_with(pat)
   }
+
 
   /// Trims in place, unlike `str::trim_left_matches()`.
   pub fn trim_left_matches<P, T>(&mut self, pat: P)
@@ -127,10 +137,12 @@ impl<'d> CharIter<'d>{
     }
   }
 
+
   // Trims whitespace in place, unlike `str::trim_left()`.
   pub fn trim_left(&mut self){
     self.trim_left_matches(|c: char|{c.is_whitespace()});
   }
+
 
   /// Consumes the prefix string for which each character `c` matches `pred(c)`, returning the
   /// prefix.
@@ -180,83 +192,6 @@ impl<'d> CharIter<'d>{
 
       } // end match `result.is_empty`
     } // end else (All `char`s matched)
-  }
-}
-
-
-#[cfg(test)]
-mod tests {
-  use super::*;
-
-  #[test]
-  fn peek_and_next(){
-    let mut c = CharIter::new("abcd");
-    assert_eq!(c.peek(), Some('a'));
-    assert_eq!(c.next(), Some('a'));
-    assert_eq!(c.next(), Some('b'));
-    assert_eq!(c.next(), Some('c'));
-    assert_eq!(c.peek(), Some('d'));
-    assert_eq!(c.next(), Some('d'));
-    assert_eq!(c.next(), None);
-    assert_eq!(c.next(), None);
-  }
-
-  #[test]
-  fn empty_chars(){
-    let mut c = CharIter::new("");
-    assert!(c.is_empty());
-    let mut c2 = CharIter::new("");
-    assert_eq!(c2.next(), None);
-    assert_eq!(c2.next(), None);
-  }
-
-  #[test]
-  fn get_empty_prefix(){
-    let mut c = CharIter::new("");
-    let result = c.get_prefix_match(|ch: char|{ ch.is_uppercase()});
-    assert_eq!(result, None);
-    assert_eq!(c.next(), None);
-    assert_eq!(c.data(), "");
-  }
-
-  #[test]
-  fn trim_left_str(){
-    let mut c = CharIter::new("aaaabcd");
-    c.trim_left_matches("a");
-    assert_eq!(c.data(), "bcd");
-  }
-
-
-  #[test]
-  fn trim_left_char(){
-    let mut c = CharIter::new("aaaabcd");
-    c.trim_left_matches('a');
-    assert_eq!(c.data(), "bcd");
-  }
-
-
-  #[test]
-  fn trim_left_pred(){
-    let mut c = CharIter::new("aaaabcd");
-    c.trim_left_matches(|ch: char |{ ch == 'a'});
-    assert_eq!(c.data(), "bcd");
-  }
-
-
-  #[test]
-  fn trim_whitespace(){
-    let mut c = CharIter::new("  \t\n   abcd");
-    c.trim_left();
-    assert_eq!(c.data(), "abcd");
-  }
-
-  #[test]
-  fn get_prefix(){
-    let mut c = CharIter::new("ABCDEFGabcd");
-    let result = c.get_prefix_match(|ch: char|{ ch.is_uppercase()});
-    assert_eq!(result, Some("ABCDEFG"));
-    assert_eq!(c.next(), Some('a'));
-    assert_eq!(c.data(), "bcd");
   }
 
 }

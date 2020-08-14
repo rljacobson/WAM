@@ -21,6 +21,7 @@ use crate::address::Address;
 
 pub type ArityType = Word;
 
+
 /**
 
   The `Functor` struct represents a symbol f/n. Clones are cheap. Functors are interned
@@ -40,6 +41,7 @@ pub struct Functor {
   */
 }
 
+
 impl Functor{
 
   /**
@@ -56,6 +58,7 @@ impl Functor{
     functor_address.enc()
   }
 
+
   /**
     Decodes a `Word` as a functor.
 
@@ -67,9 +70,12 @@ impl Functor{
     // let functor_address = Address::Functor(word as AddressNumberType);
     let functor_address =
       match Address::try_decode(word & 0xFFFF){
+
         Some(a) => a,
+
         // ToDo: What should happen in this arm?
         None => Address::from_funct_idx((word & 0xFFFF) as usize),
+
       };
 
     match try_get_interned_functor(&functor_address) {
@@ -96,6 +102,7 @@ impl Functor{
 
 }
 
+
 impl Display for Functor{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     if self.arity == 0{
@@ -105,6 +112,7 @@ impl Display for Functor{
     }
   }
 }
+
 
 lazy_static!(
   pub static ref DUMMY_FUNCTOR: Functor = Functor{ name: DefaultAtom::from("dummy"), arity: 0};
@@ -134,6 +142,7 @@ lazy_static! {
     Arc::new(Mutex::new(BiMap::new()));
 }
 
+
 /// Retrieves the functor for the given functor address if it exists in the symbol table.
 /// This function is thread safe.
 pub fn try_get_interned_functor(address: &Address) -> Option<Functor>{
@@ -141,10 +150,14 @@ pub fn try_get_interned_functor(address: &Address) -> Option<Functor>{
   let maybe_functor = symbols.get_by_right(address);
 
   match maybe_functor {
+
     Some(functor) => Some(functor.clone()),
+
     None    => None
+
   }
 }
+
 
 /// Gives the virtual address of a `Functor`, creating a new entry in the symbol table if
 /// necessary. The virtual address is a stand-in for the functor's text name in compiled code.

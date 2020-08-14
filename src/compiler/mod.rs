@@ -1,3 +1,4 @@
+mod variables;
 mod compile;
 mod parser;
 mod chariter;

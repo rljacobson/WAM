@@ -19,8 +19,10 @@ use num_enum::{TryFromPrimitive, IntoPrimitive};
 
 use crate::bytecode::Word;
 
+
 // `AddressType` is `usize`, as it is naturally an index into a memory store.
 pub type AddressNumberType = usize;
+
 
 #[derive(
   EnumDiscriminants,
@@ -33,66 +35,86 @@ pub type AddressNumberType = usize;
 #[repr(u8)]
 pub enum Address{
   /// A "pointer" to a cell is an index into the `HEAP`. We could call it a cell reference.
-  Heap(     AddressNumberType ),
+  Heap(        AddressNumberType ),
   /// A "pointer" to a register is an index into the register vector `X`.
-  Register( AddressNumberType ),
+  Register(    AddressNumberType ),
   /// An index into code memory
-  Code(     AddressNumberType ),
+  Code(        AddressNumberType ),
+  /// An index into code memory
+  Stack(       AddressNumberType ),
+  /// An index into code memory
+  Environment( AddressNumberType ),
   /// A virtual address for functor symbols
-  Functor(  AddressNumberType ),
+  Functor(     AddressNumberType ),
 }
 
+
 impl Address {
+
   /// Converts the address to an index into the corresponding vector.
   pub fn idx(&self) -> AddressNumberType {
     match self{
       | Address::Heap(i)
       | Address::Functor(i)
+      | Address::Stack(i)
+      | Address::Environment(i)
       | Address::Code(i) => *i as AddressNumberType,
       // Registers count from 1, so subtract 1 to convert to index.
       Address::Register(i) => (i-1) as AddressNumberType,
     }
   }
 
+
   pub fn tag(&self) -> Word {
     std::intrinsics::discriminant_value(self) as Word
   }
 
+
   /// Encodes the address into the bits as they appear in bytecode.
   pub fn enc(&self) -> Word {
     let index = self.idx() as Word;
-    (index << 2) | self.tag()
+    (index << 3) | self.tag()
   }
 
+
   pub fn try_decode(word: Word) -> Option<Address>{
-    let tag     = word & 0b11;  // First two bits are the tag.
-    let index   = word >> 2;
+    let tag     = word & 0b111;  // First three bits are the tag.
+    let index   = word >> 3;
 
     match Segment::try_from(tag as u8) {
+
       Ok(Segment::Heap)     => Some(Address::from_heap_idx( index as usize )),
+
       Ok(Segment::Register) => Some(Address::from_reg_idx(  index as usize )),
+
       Ok(Segment::Code)     => Some(Address::from_code_idx( index as usize )),
+
       Ok(Segment::Functor)  => Some(Address::from_funct_idx(index as usize )),
 
       _                     => { unreachable!(); }
+
     }
   }
+
 
   /// Converts an index into the heap vector to a heap address.
   pub fn from_heap_idx(heap_idx: usize) -> Address{
     Address::Heap(heap_idx as AddressNumberType)
   }
 
+
   /// Converts an index into the register vector to a register address.
   pub fn from_reg_idx(reg_idx: usize) -> Address{
     Address::Register((reg_idx + 1) as AddressNumberType)
   }
+
 
   /// Converts an index into the heap vector to a heap address.
   #[allow(dead_code)]
   pub fn from_code_idx(heap_idx: usize) -> Address{
     Address::Code(heap_idx as AddressNumberType)
   }
+
 
   /*
   Converts a virtual functor address into an `Address:Functor`.
@@ -105,6 +127,7 @@ impl Address {
     Address::Functor(funct_idx as AddressNumberType)
   }
 
+
   /// Panics if the address is not a register pointer.
   pub fn require_register(&self){
     if let Address::Register(_) = self{
@@ -115,6 +138,7 @@ impl Address {
       self
     );
   }
+
 
   /// Panics if the address is not a heap pointer.
   #[allow(dead_code)]
@@ -128,6 +152,7 @@ impl Address {
     );
   }
 
+
   /// Panics if the address is not a code pointer.
   #[allow(dead_code)]
   pub fn require_code(&self){
@@ -139,6 +164,7 @@ impl Address {
       self
     );
   }
+
 
   /// Panics if the address is not a functor virtual address.
   #[allow(dead_code)]
@@ -152,6 +178,7 @@ impl Address {
     );
   }
 
+
   pub fn is_register(&self) -> bool {
     match self {
       Address::Register(_) => true,
@@ -163,22 +190,37 @@ impl Address {
 
 
 impl Display for Address{
+
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self {
+
       Address::Heap(i) => {
         write!(f, "HEAP[{}]", i)
-      },
+      }
+
       Address::Register(i) => {
         write!(f, "X[{}]", i)
-      },
+      }
+
       Address::Code(i) => {
         write!(f, "CODE[{}]", i)
       }
+
+      Address::Stack(i) => {
+        write!(f, "STACK[{}]", i)
+      }
+
+      Address::Environment(i) => {
+        write!(f, "ENV[{}]", i)
+      }
+
       Address::Functor(i) => {
         write!(f, "FUNCT[{}]", i)
       }
+
     }
   }
+
 }
 
 // Increment an address
@@ -188,6 +230,7 @@ impl Add<AddressNumberType> for Address{
   fn add(self, rhs: AddressNumberType) -> Address{
     // ToDo: Is there a more compact way to write this since the payload of all variants is the
     //       same?
+    /*
     match self{
       Address::Heap(i) => {
         Address::Heap(i+rhs)
@@ -202,6 +245,18 @@ impl Add<AddressNumberType> for Address{
         Address::Functor(i+rhs)
       }
     }
+    */
+
+    // Idea 2
+    // if let variant(i) = self{
+    //   variant(i + rhs)
+    // }
+
+    // Idea 1
+    let address = self.clone();
+    address.0 = self.0 + rhs;
+    address
   }
+
 }
 

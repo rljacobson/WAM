@@ -4,10 +4,12 @@ use std::collections::VecDeque;
 use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 
-use string_cache::DefaultAtom;
+use string_cache::{DefaultAtom, EmptyStaticAtomSet, Atom};
 
 use crate::functor::*;
 use crate::address::*;
+use nom::lib::std::collections::HashMap;
+use std::collections::hash_map::Entry;
 
 pub type RcTerm = Rc<Term>;
 pub type TermVec = Vec<Term>;
@@ -21,18 +23,20 @@ pub enum Term {
   /// An interned string staring with an uppercase letter.
   Variable(DefaultAtom),
 
-  /// A `Predicate` is a functor: `f(stuff)`. Constants are represented as functors
-  /// of arity 0, so `args` might be an empty `Vec`. Note that a fact is a single predicate
-  /// followed by a period: `f(stuff).`.
-  Predicate {
+  /**
+    A `Structure` is a functor with arguments: `f(stuff)`. Constants are represented as functors of
+    arity 0, so `args` might be an empty `Vec`. Note that a fact is a single predicate followed by a
+    period: `f(stuff).`.
+  */
+  Structure {
     functor : Functor,
     args    : TermVec
   },
 
   /// `Rule` of the form `predicate :- predicate, predicate, ..., predicate.`. A so-called chain
-  /// is a `Rule` in which `goals` contains a single element. The `predicate` is always a `Fact`.
+  /// is a `Rule` in which `goals` contains a single element.
   Rule{
-    predicate: Box<Term>, //RcTerm?
+    head: Box<Term>, //  ToDo: RcTerm? Move to first position of goals?
     goals: TermVec
   },
 
@@ -44,11 +48,13 @@ pub enum Term {
   Ref(Address)
 }
 
+
 impl Display for Term{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     write!(f, "{}", self.fmt_aux(&"".to_string(), &"".to_string()))
   }
 }
+
 
 impl Term{
 
@@ -58,7 +64,7 @@ impl Term{
 
       Term::Variable(name) => name.to_string(),
 
-      Term::Predicate { functor, args } => {
+      Term::Structure { functor, args } => {
         if args.is_empty() {
           format!("{}", functor.name)
         }else {
@@ -74,7 +80,7 @@ impl Term{
         }
       }
 
-      Term::Rule { predicate, goals } => {
+      Term::Rule { head: predicate, goals } => {
         if goals.is_empty() {
           // Should never happen unless we redesign a fact as a `Rule` with empty RHS.
           format!("{}.", predicate)
@@ -113,6 +119,7 @@ impl Term{
     }
   }
 
+
   /// A helper for `fmt_aux`, to keep things DRY.
   fn fmt_tree_term(buffer: &mut String, children: &TermVec,
                    child_prefix: &String, prefix_space: &String) {
@@ -136,12 +143,13 @@ impl Term{
     };
   }
 
+
   fn fmt_aux(&self, prefix: &String, child_prefix: &String) -> String {
     match self {
 
       Term::Variable(c)  => format!("{}Variable<{}>", prefix, c),
 
-      Term::Predicate { functor, args } => {
+      Term::Structure { functor, args } => {
         let mut self_token =
           if args.is_empty() {
             format!("{}Constant<{}>", prefix, functor.name)
@@ -152,7 +160,7 @@ impl Term{
         self_token
       }
 
-      Term::Rule { predicate, goals } => {
+      Term::Rule { head: predicate, goals } => {
         //                     "      ┗━━━━━┿━━ "
         //                     "            ├── "
         let mut self_token = format!(
@@ -180,7 +188,69 @@ impl Term{
 
       Term::Ref(address) => format!("{}Reference<{}>", prefix, address)
 
+    }
+  }
 
+
+  fn iter(&self) -> TermIter{
+    TermIter::new(self)
+  }
+
+
+  /// Produces a HashMap of `(name, is_permanent)` for every variable in the term.
+  pub fn variables(&self) -> HashMap<DefaultAtom, bool>{
+
+    // Helper function
+    fn fold_variable_lists(variables: &mut HashMap<DefaultAtom, bool>, term_list: &TermVec){
+      for (i, goal) in term_list.iter().enumerate(){
+        // The variables in head are included as variables in the first predicate.
+        if i == 0 {
+          variables.extend(goal.variables().iter());
+        } else{
+          for (name, is_permanent) in goal.variables().iter() {
+            match variables.entry(name.clone()) {
+
+              Entry::Occupied(mut entry) => {
+                // The variable has previously been added. Set `is_permanent` to true for that
+                // variable.
+                entry.insert(true);
+              }
+
+              Entry::Vacant(mut entry) => {
+                // Create an entry for this variable initialized to its existing value.
+                entry.insert(*is_permanent);
+              }
+
+            }
+          }
+        }
+      }
+    }
+
+    match self {
+
+      Term::Rule { head, goals } => {
+        let mut variables = head.variables();
+        fold_variable_lists(&mut variables, goals);
+        variables
+      }
+
+      Term::Query(goals) => {
+        let mut variables = HashMap::new();
+        fold_variable_lists(&mut variables, goals);
+        variables
+      }
+
+      otherwise => {
+        let mut variables = HashMap::new();
+        // concat only.
+        for term in self.iter(){
+          if let Term::Variable(name) = term{
+            variables.insert(name, false);
+          }
+        }
+        variables
+      }
     }
   }
 
@@ -196,6 +266,7 @@ pub struct TermIter<'t >{
   terms: VecDeque<&'t Term>, // A stack of terms yet to be visited.
 }
 
+
 impl<'t> TermIter<'t>{
   pub fn new(start: &'t Term) -> TermIter {
     TermIter{
@@ -203,6 +274,7 @@ impl<'t> TermIter<'t>{
     }
   }
 }
+
 
 /// Iterates over the terms in the term tree breadth first.
 impl<'t> Iterator for TermIter<'t>{
@@ -215,10 +287,21 @@ impl<'t> Iterator for TermIter<'t>{
       Some(term) => {
         match term {
 
-          Term::Predicate {args, ..} => {
+          Term::Structure {args, ..} => {
             self.terms.extend(args.iter());
             option_term
-          },
+          }
+
+          Term::Rule { head: predicate, goals} => {
+            self.terms.push_back(predicate);
+            self.terms.extend(goals.iter());
+            option_term
+          }
+
+          Term::Query(term_vec) => {
+            self.terms.extend(term_vec.iter());
+            option_term
+          }
 
           _t => option_term
         }

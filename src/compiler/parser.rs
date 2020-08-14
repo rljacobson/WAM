@@ -1,5 +1,4 @@
 /*!
-
 This module parses prolog source code.
 
 The language is given by the following EBNF:
@@ -69,6 +68,7 @@ use string_cache::DefaultAtom;
 use crate::functor::{ArityType, Functor};
 use super::term::{Term, TermVec};
 
+
 struct Parser<'a>{
   text   : &'a str,
   errors : Vec<String>
@@ -81,7 +81,9 @@ pub fn parse(input: &str) -> Result<(TermVec, Option<Term>), ()> {
   let mut parser = Parser::new(input);
 
   match parser.parse(){
+
     Ok(t) => Ok(t),
+
     Err(()) => {
       eprintln!("Encountered these errors while parsing:");
       for e in parser.errors{
@@ -89,10 +91,13 @@ pub fn parse(input: &str) -> Result<(TermVec, Option<Term>), ()> {
       }
       Err(())
     }
+
   }
 }
 
+
 impl<'a> Parser<'a> {
+
   pub fn new(input: &'a str) -> Self {
     Parser {
       text: input,
@@ -100,9 +105,10 @@ impl<'a> Parser<'a> {
     }
   }
 
+
   /**
     Parses text to produce abstract syntax trees made of `Term`s.
-    Returns a tuple pf (clauses, query).
+    Returns a tuple of (clauses, query).
 
     <clauses> ::= <clauses> <clause> | <clauses>
     <query>   ::= ':-' <clause>
@@ -166,60 +172,57 @@ impl<'a> Parser<'a> {
     } // end loop
 
     match success {
+
       true => Ok((clauses, query)),
+
       false => {
         for error in &self.errors {
           eprintln!("{}", error);
         }
         Err(())
       }
+
     }
   }
 
-  /**
-    Gobbles the rest of the line if possible. If another error prevents this, it gives up.
 
-    Returns whether or not the error should be considered fatal.
+  /**
+    Returns whether the error should be considered fatal. This method attempts to recover by
+    gobbling up the rest of the line if possible ("panic mode"). If another error prevents this, it
+    gives up.
   */
   fn panic_mode(&mut self) -> bool{
     let result: Result<(&str, &str), nom::Err<(&str, nom::error::ErrorKind)>>
       = is_not("\n")(self.text);
     match result {
+
       Ok((i, _)) => {
         self.text = i;
         false
-      },
+      }
+
       Err(_) => {
         eprintln!("Could not recover from parse error.");
         true
-      },
+      }
+
     }
   }
 }
 
 
 /**
-  <clause>          ::= <fact> | <rule> | query
-  <fact>            ::= <predicate> '.'
-  <rule>            ::= <predicate> ':-' <predicate_list> '.'
-  <query>           ::= '?-' <predicate_list> '.'
+  <clause> ::= <fact> | <rule> | query
+  <fact>   ::= <predicate> '.'
+  <rule>   ::= <predicate> ':-' <predicate_list> '.'
+  <query>  ::= '?-' <predicate_list> '.'
 */
 fn pclause(text: &str) -> IResult<&str, Term>{
   alt((
+
     // A fact
     terminated(ppredicate, wst(one_char('.'))),
-    // A query
-    map(
-      terminated(
-        preceded(ws(tag("?-")),
-          ppredicate_list
-        ),
-        wst(one_char('.'))
-      ),
-      |out|{
-        Term::Query(out)
-      }
-    ),
+
     // A rule
     map(
       terminated(
@@ -231,11 +234,25 @@ fn pclause(text: &str) -> IResult<&str, Term>{
       ),
       |out|{
         Term::Rule {
-          predicate: Box::new(out.0),
+          head: Box::new(out.0),
           goals: out.1,
         }
       }
+    ),
+
+    // A query
+    map(
+      terminated(
+        preceded(ws(tag("?-")),
+                 ppredicate_list
+        ),
+        wst(one_char('.'))
+      ),
+      |out|{
+        Term::Query(out)
+      }
     )
+
   ))
   (text)
 }
@@ -263,6 +280,7 @@ fn ppredicate(text: &str) -> IResult<&str, Term>{
   (text)
 }
 
+
 /**
   <structure> ::= <small_atom> '(' <predicate_list> ')' | <small_atom>
 */
@@ -284,7 +302,7 @@ fn pstructure(text: &str) -> IResult<&str, Term>{
           name: DefaultAtom::from(out.0),
           arity: args.len() as ArityType
         };
-        Term::Predicate {
+        Term::Structure {
           functor,
           args
         }
@@ -296,7 +314,7 @@ fn pstructure(text: &str) -> IResult<&str, Term>{
         name: DefaultAtom::from(out),
         arity: 0
       };
-      Term::Predicate {
+      Term::Structure {
         functor,
         args: vec![]
       }
@@ -306,6 +324,7 @@ fn pstructure(text: &str) -> IResult<&str, Term>{
   (text)
 }
 
+
 /**
   <small_atom> ::= <lowercase> <alphanumeric>*
 */
@@ -313,6 +332,7 @@ fn psmall_atom(text: &str) -> IResult<&str, &str>{
   recognize(pair(take_while1(char::is_lowercase), alphanumeric0))
   (text)
 }
+
 
 /**
   <variable> ::= <uppercase> <alphanumeric>*
@@ -361,6 +381,7 @@ pub fn pskip<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, (), E>
   )(i)
 }
 
+
 /*
   <eol_comment> ::= '%' [^\n\r]*
 */
@@ -370,6 +391,7 @@ pub fn peol_comment<'a, E: ParseError<&'a str>>(i: &'a str) -> IResult<&'a str, 
       |_| ()
   )(i)
 }
+
 
 /*
   <eol_comment> ::= '%' [^\n\r]*

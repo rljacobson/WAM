@@ -28,6 +28,7 @@ use crate::bytecode::Word;
 pub type RcCell = Rc<Cell>;
 pub type CellVec = Vec<Cell>;
 
+
 /**
   A `Cell` is a piece of data that can be stored at a register or heap `Address`.
 
@@ -39,7 +40,8 @@ pub type CellVec = Vec<Cell>;
 #[strum_discriminants(repr(u8))]
 #[repr(u8)]
 pub enum Cell {
-  /// A cell containing nothing. Used when growing a memory store so it can be filled out of order.
+  /// A cell containing nothing. Used when growing a memory store so it can be filled out of
+  /// order. Note that `Empty` has discriminant zero.
   Empty,
   /// `<STR, k>` where `k` is the address of a functor `f/n`; a pointer to a functor
   STR(Address),
@@ -47,12 +49,18 @@ pub enum Cell {
   REF(Address),
   /// A functor, displayed as `f/n`, where `n` is the functor's arity.
   Functor(Functor),
-  /// A functor structure with children, used as an intermediate representation in registers. The
-  /// first element of the `CellVec` is a `Cell::Functor`; the remaining elements are arguments
-  /// in the form of `Cell::REF`s.
+
+  /*
+
+    A functor structure with children.
+    This variant is not actually a cell value. It is used as an intermediate representation
+    during compilation. The
+    first element of the `CellVec` is a `Cell::Functor`; the remaining elements are arguments
+    in the form of `Cell::REF`s.
+
+  */
   Structure(CellVec),
 }
-
 
 
 impl Display for Cell{
@@ -73,9 +81,11 @@ impl Display for Cell{
 
       Cell::Structure(args) => {
         match args.len() {
+
           1 => {
             write!(f, "{}", args[0])
           }
+
           _ => {
             let mut arg_iter = args.iter();
             write!(
@@ -86,6 +96,7 @@ impl Display for Cell{
                       .join(", ")
             )
           }
+
         }
       }
 
@@ -97,26 +108,33 @@ impl Display for Cell{
   }
 }
 
+
 impl Cell {
 
   /// Returns the binary form of the `Cell` as a `Word`.
   pub fn enc(&self) -> Word{
     match self{
+
       | Cell::REF(address)
       | Cell::STR(address) => {
         (address.enc() << 8) | self.tag()
       }
+
       Cell::Functor(functor) => {
         (functor.enc() << 8) | self.tag()
       }
+
       Cell::Structure(_) => {
         unreachable!("Error: Cannot encode a `Cell::Structure`.")
       }
+
       Cell::Empty => {
         self.tag()
       }
+
     }
   }
+
 
   pub fn try_decode(word: Word) -> Option<Cell>{
     let tag = word & 0xFF;
@@ -157,6 +175,7 @@ impl Cell {
     }
   }
 
+
   /// Gives the 8-bit numeric value that represents the cell variant. To encode both the variant
   /// and its payload use `Cell::enc()`.
   pub fn tag(&self) -> Word {
@@ -165,6 +184,7 @@ impl Cell {
     //       `Into::<u8>::into(*self) as Word`
     std::intrinsics::discriminant_value(self) as Word
   }
+
 
   /// Extracts the address from either `Cell::REF` or `Cell::STR` values.
   pub fn extract_address(&self) -> Option<Address> {
@@ -221,5 +241,6 @@ impl Cell {
 
     }
   }
+
 }
 

@@ -61,7 +61,11 @@ impl Bytecode{
     };
 
     let instruction = // = the value of the following giant if statement:
-    if opcode.code() < MAX_FUNCTOR_OPCODE {
+    if opcode.code() == 0 {
+      // Halt instruction
+      // [OpCode:8]
+      Instruction::Nullary(opcode)
+    } else if opcode.code() < MAX_FUNCTOR_OPCODE {
       // [OpCode:8][Address:24][Name:16][Arity:16]
       let address = match Address::try_decode(bytecode.low >> 8) {
         Some(a) => a,
@@ -146,18 +150,21 @@ impl Display for Bytecode{
 )]
 #[repr(u8)]
 pub enum Operation {
+
+  Halt,              // halt, intentionally with discriminant zero.
+
   // 64 bit instructions //
   // M0 Opcodes //
   PutStructure,      // put_structure( f/n, address )
   GetStructure,      // get_structure( f/n, address)
-  // Opcode 2
+  // Opcode 3
 
   // M1 Opcodes
   PutVariable,       // put_variable( address, address )
   GetVariable,       // get_variable( address, address )
   PutValue,          // put_value( address, address )
   GetValue,          // get_value( address, address )
-  // Opcode 6
+  // Opcode 7
 
   // 32 bit instructions //
   // M0 Opcodes //
@@ -170,21 +177,19 @@ pub enum Operation {
 
   // M2 Opcode //
   Allocate,          // allocate( n )
-  // Opcode 12
+  // Opcode 13
 
   // Padded byte Opcodes (32 bits) //
   // M1 Opcode //
   Proceed,           // proceed
-
   // M2 Opcode //
-  Halt,              // halt
   Deallocate,        // deallocate
 
 }
 
-pub const MAX_UNARY_OPCODE       :  Word  = 12;
-pub const MAX_DOUBLE_WORD_OPCODE :  Word  = 6;
-pub const MAX_FUNCTOR_OPCODE     :  Word  = 2;
+const MAX_UNARY_OPCODE       :  Word  = 13;
+const MAX_DOUBLE_WORD_OPCODE :  Word  =  7;
+const MAX_FUNCTOR_OPCODE     :  Word  =  3;
 
 impl Operation{
 
@@ -197,7 +202,7 @@ impl Operation{
   }
 
   pub fn is_functor(&self) -> bool {
-    self.code() < MAX_FUNCTOR_OPCODE
+    (self.code() < MAX_FUNCTOR_OPCODE) && (self.code() != 0)
   }
 
   /**
@@ -207,14 +212,16 @@ impl Operation{
   Note that this function does not check if the input has a valid opcode.
   */
   pub fn is_double_word(word: &Word) -> bool {
-    (*word & 0xFF) < MAX_DOUBLE_WORD_OPCODE
+    let opcode = (*word & 0xFF);
+    (opcode < MAX_DOUBLE_WORD_OPCODE) && (opcode != 0)
   }
 
   pub fn arity(&self) -> Word {
     match self.code() {
-      value if value < MAX_DOUBLE_WORD_OPCODE  => 2,
-      value if value < MAX_UNARY_OPCODE        => 1,
-      _value                                   => 0
+      0                                       => 0,
+      value if value < MAX_DOUBLE_WORD_OPCODE => 2,
+      value if value < MAX_UNARY_OPCODE       => 1,
+      _value                                  => 0
     }
   }
 }
@@ -290,7 +297,7 @@ impl Instruction {
   Encodes the instruction into bytecode. It is the caller's responsibility to
   use the correct `Instruction` variant for the given opcode.
   */
-  pub fn encode_instruction(&self) -> Bytecode {
+  pub fn bytecode(&self) -> Bytecode {
     match self {
       Instruction::Binary { opcode, address, argument } => {
         let high = match argument {
@@ -337,7 +344,7 @@ impl Instruction {
       | Instruction::Binary{opcode, ..}
       | Instruction::Unary {opcode, ..}
       | Instruction::Nullary(opcode) => {
-        match opcode.code() < MAX_DOUBLE_WORD_OPCODE {
+        match Operation::is_double_word(&opcode.code()) {
           true => 2, // Two words
           false => 1  // One Word
         }

@@ -12,7 +12,11 @@ use crate::cell::*;
 use crate::functor::*;
 use crate::bytecode::*;
 use crate::compiler::term::*;
-use crate::compiler::Compilation;
+use crate::compiler::{Compilation, CODE_MEMORY_SIZE};
+use core::panicking::panic_fmt;
+
+
+const STACK_MEMORY_SIZE: usize = CODE_MEMORY_SIZE;
 
 
 #[allow(non_snake_case)]
@@ -33,9 +37,10 @@ pub struct WVM {
   rp        : usize,     // Register Pointer, a cursor for display
   ip        : usize,     // Instruction Pointer (P in [Aït-Kaci])
   cp        : usize,     // Continuation Pointer, the jump target for `Proceed`
+  ce        : usize,     // Current Environment, a pointer to the beginning of the stack frame.
   registers : Vec<Word>, // Term registers, a memory store (X[i] in [Aït-Kaci])
 
-  // Symbol table mapping line labels to their address in code memory.
+  // Symbol table mapping line labels (functors) to their address in code memory.
   labels          : Vec<(Functor, Address)>,
   assembly_buffer : String, // String buffer for emitted code text
   variable_bindings: Vec<(DefaultAtom, Address)>,
@@ -68,7 +73,7 @@ impl WVM {
           args.push(self.memory_to_term(&(functor_address + i as usize)));
         }
 
-        Term::Predicate {
+        Term::Structure {
           functor,
           args
         }
@@ -97,7 +102,6 @@ impl WVM {
       println!("{:>10} = {}", var, term.expression_string());
     }
   }
-
 
 
   fn make_memory_table(
@@ -151,22 +155,24 @@ impl WVM {
 
     }
   }
-  
+
+
   fn new() -> WVM {
     WVM {
       fail       :  false,
       query      :  true,
       mode       :  Mode::Read, // Arbitrarily chosen.
 
-      heap       :  vec![],
-      code       :  vec![],
+      heap       :  Vec::with_capacity(CODE_MEMORY_SIZE),
+      code       :  vec![], // Allocated elsewhere.
       registers  :  vec![],
-      stack      :  vec![],
+      stack      :  Vec::with_capacity(STACK_MEMORY_SIZE),
 
       hp         :  0,
       rp         :  0,
       ip         :  0,
       cp         :  0,
+      ce         :  0,
 
       labels         :  Vec::new(),
       assembly_buffer:  String::new(),
@@ -174,13 +180,14 @@ impl WVM {
     }
   }
 
+
   /// Constructs a new WVM object inilialized with the given `Compilation`
   pub fn from_compilation(compilation: &mut Compilation) -> Self {
     let mut new_vm = WVM::new();
     std::mem::swap(&mut new_vm.code,            &mut compilation.code           );
     std::mem::swap(&mut new_vm.labels,          &mut compilation.labels         );
     std::mem::swap(&mut new_vm.assembly_buffer, &mut compilation.assembly_buffer);
-    std::mem::swap(&mut new_vm.variable_bindings, &mut compilation.variable_bindings);
+    std::mem::swap(&mut new_vm.variable_bindings, &mut compilation.query_variables);
     new_vm
   }
 
@@ -201,6 +208,7 @@ impl WVM {
   fn value_at(&self, ptr: &Address) -> Cell{
     Cell::try_decode(self.word_at(ptr)).unwrap()
   }
+
 
   /// Same as `value_at()`, but does not decode data into `Cell`.
   fn word_at(&self, ptr: &Address) -> Word{
@@ -242,6 +250,7 @@ impl WVM {
 
       Address::Heap(_)      => {
         if address.idx() >= self.heap.len() {
+          // ToDo: Do something more sophisticated with heap memory management.
           self.heap.resize(address.idx() + 1, 0);
         }
         self.heap[address.idx()] = *word;
@@ -283,6 +292,7 @@ impl WVM {
 
     }
   }
+
 
   /**
     Binds an unbound variable at one address to the other address. If both are unbound, registers
@@ -334,6 +344,7 @@ impl WVM {
     }
   }
 
+
   /**
     Push a new `STR` (and adjoining functor) cell onto the heap and copy that cell into the
     allocated register address.
@@ -351,6 +362,7 @@ impl WVM {
     self.set_value_at(address, &cell);
   }
 
+
   /**
     Push a new `REF` cell onto the heap containing its own address, and copy it into the given
     register.
@@ -365,6 +377,7 @@ impl WVM {
     self.heap.push(cell.enc());
     self.set_value_at(reg_ptr, &cell);
   }
+
 
   /**
     Push the value of the given register onto the heap.
@@ -381,6 +394,7 @@ impl WVM {
 
     self.heap.push(self.word_at(register));
   }
+
 
   /**
     Either matches a functor, binds a variable to a new functor value, or fails.
@@ -437,8 +451,10 @@ impl WVM {
                    functor, address, _c);
         self.fail = true;
       }
+
     };
   }
+
 
   /**
     Either reads the top of the `HEAP` into register `X[i]` or creates a variable on the `HEAP`
@@ -468,6 +484,7 @@ impl WVM {
     self.hp += 1;
   }
 
+
   /**
     Either pushes the value of `X[i]` onto the `HEAP` (write) or unifies `X[i]` and the cell at `S`.
 
@@ -491,6 +508,7 @@ impl WVM {
 
     self.hp += 1;
   }
+
 
   fn unify(&mut self, a1: &Address, a2: &Address){
     // In [Warren] the PDL (push down list) is global.
@@ -546,8 +564,9 @@ impl WVM {
   /**
     put_variable Xn, Ai
 
-      "The first occurrence of a variable in i-th argument position pushes a new unbound REF cell
-      onto the heap and copies it into that variable’s register as well as argument register Ai."
+      Push a new unbound REF cell onto the heap and copy it into that variable’s register as well as
+      argument register Ai.
+
   */
   fn put_variable(&mut self, address1: &Address, address2: &Address){
     address1.require_register();
@@ -560,8 +579,9 @@ impl WVM {
     self.heap.push(cell);
   }
 
+
   /**
-    get_variable Xn, Ai
+    get_variable Xn, Ai     Xn <-- Ai
 
       "Sets the argument in the Xn position to the value of argument register Ai."
   */
@@ -573,8 +593,9 @@ impl WVM {
     self.set_word_at(address1, &self.word_at(address2));
   }
 
+
   /**
-    put_value Xn Ai
+    put_value Xn Ai     Xn --> Ai
 
     "[C]opies Xn's value into argument register Ai."
   */
@@ -586,6 +607,7 @@ impl WVM {
     self.set_value_at(address2, &self.value_at(address1));
   }
 
+
   /**
     get_value Xn, Ai
 
@@ -594,6 +616,7 @@ impl WVM {
   fn get_value(&mut self, address1: &Address, address2: &Address){
     self.unify(address1, address2);
   }
+
 
   /// A function call to the function with entry point `address`.
   fn call(&mut self, address: &Address) {
@@ -604,13 +627,60 @@ impl WVM {
     self.ip = address.idx();
   }
 
-  fn allocate(&mut self, _size: Word){
+
+  /**
+    Prepares a new environment (stack frame) on the stack with `slots` number of local (permanent)
+    variables.
+    The
+    environment has total size `slots + 3`.
+
+    An environment has the form:
+    ```
+    ┌─────────┬──────────────────────────────────────┐
+    │Address  │  Value                               │
+    ├─────────┼──────────────────────────────────────┤
+    │        E│  CE (start of previous stack frame)  │
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │    E + 1│  CP (Continuation Pointer)           │
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │    E + 2│  n (Slots, number of local variables)│
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │    E + 3│  Y1                                  │
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │    E + 4│  Y2                                  │
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │      ⋮  │  ⋮                                   │
+    ├┈┈┈┈┈┈┈┈┈│┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┈┤
+    │E + n + 2│  Yn                                  │
+    ├─────────┼──────────────────────────────────────┤
+    │      ⋮  │  ⋮                                   │
+    └─────────┴──────────────────────────────────────┘
+    ```
+
+  */
+  fn allocate(&mut self, slots: Word){
+    let final_len = self.stack.len() + slots + 3;
+    if final_len > self.stack.capacity(){
+      panic!("Error: Stack allocation failed.");
+    }
+    let new_ce = stack.len();
+    self.stack.push(self.ce as Word);
+    self.stack.push(self.ip as Word);
+    self.stack.push(slots);
+    self.stack.resize(final_len, 0);
+    self.ce = new_ce;
 
   }
 
+
+  /// The inverse of `allocate()`.
   fn deallocate(&mut self){
-
+    previous_ce = self.ce;
+    self.ce = self.stack[self.ce] as usize;
+    self.ip = self.stack[previous_ce + 1] as usize;
+    self.stack.truncate(previous_ce);
   }
+
 
   /// Marks the end of a procedure and jumps to the address stored in `self.cp`.
   fn proceed(&mut self){
@@ -822,6 +892,7 @@ lazy_static! {
       .build();
 }
 
+
 impl Display for WVM {
 
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
@@ -866,12 +937,15 @@ enum Mode{
 impl Display for Mode{
   fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
     match self{
+
       Mode::Read => {
         write!(f, "Read")
-      },
+      }
+
       Mode::Write => {
         write!(f, "Write")
       }
+
     }
   }
 }

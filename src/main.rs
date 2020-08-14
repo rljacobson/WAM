@@ -20,6 +20,7 @@ mod functor;
 mod bytecode;
 mod compiler;
 
+
 use crate::wvm::WVM;
 use crate::compiler::Compilation;
 
@@ -54,6 +55,7 @@ fn main() {
   // Parser:
   let result = compiler::parse(text);
   match result {
+
     Ok((programs, query)) => {
       println!("\nQuery:\n");
       if let Some(q) = query {
@@ -66,6 +68,7 @@ fn main() {
     }
 
     Err(_) => {}
+
   }
 
   /*
